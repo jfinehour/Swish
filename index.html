@@ -136,7 +136,8 @@ input.n.edited { color: var(--accent); font-weight: 500; }
 .empty { padding: 28px 14px; color: var(--muted); text-align: center; }
 
 /* rail */
-.rail { position: sticky; top: max(12px, env(safe-area-inset-top, 0px)); display: grid; gap: 16px; }
+.rail { position: static; display: grid; gap: 16px; }
+@media (min-width: 1100px) and (min-height: 900px) { .rail { position: sticky; top: max(12px, env(safe-area-inset-top, 0px)); } }
 .form { padding: 14px; display: grid; gap: 14px; }
 .field { display: grid; gap: 5px; }
 .field label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: flex; justify-content: space-between; }
@@ -207,6 +208,7 @@ td.cg { border-left: 1px solid var(--line); }
 .dist i { position: absolute; top: 4px; height: 2px; background: var(--line); }
 .dist b { position: absolute; top: 1px; height: 8px; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 2px; }
 .dist u { position: absolute; top: 0; width: 2px; height: 10px; background: var(--ink); }
+.ver { margin: 24px 0 0; text-align: center; font-family: var(--f-data); font-size: 11px; color: var(--muted); }
 .drop { position: fixed; inset: 0; color: var(--ink); background: color-mix(in srgb, var(--bg) 85%, transparent); border: 3px dashed var(--accent); display: grid; place-items: center; z-index: 50; font-family: var(--f-display); font-size: 28px; text-transform: uppercase; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 /* phones and tablets: one column, settings scroll away normally, tables don't trap the swipe */
@@ -384,6 +386,7 @@ td.cg { border-left: 1px solid var(--line); }
   </aside>
 </div>
 </div>
+<p class="ver" id="ver">Swish v6</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1565,7 +1568,12 @@ syncCustom();
 render();
 </script>
 <script>
-if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+if ('serviceWorker' in navigator) {
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {}));
+  // when a new version takes over, reload once so it shows immediately
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && navigator.serviceWorker.controller) { reloaded = true; location.reload(); } });
+}
 </script>
 </body>
 </html>
