@@ -1,0 +1,16 @@
+{
+  "name": "Swish",
+  "short_name": "Swish",
+  "description": "NBA DFS lineup optimizer for DraftKings and FanDuel.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0A0C0F",
+  "theme_color": "#0A0C0F",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
