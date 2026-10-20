@@ -23,6 +23,7 @@ img { max-width: 100%; }
 <style>
 /* Layout: scorer's-table tool — slate pool on the left, controls rail on the right, results below. */
 :root {
+  --m1: #0077C0; --m2: #5AA9DC; --m3: #9FB3C2; --m4: #C9D3DB;
   --bg: #F3F5F7; --panel: #FFFFFF; --sunk: #F4F6F8; --ink: #0A0C0F; --muted: #5B6670; --line: #D3DAE0;
   --accent: #0077C0; --accent-soft: #E3F0F9; --accent-ink: #FFFFFF; --silver: #C4CED4;
   --band: #0A0C0F; --band-ink: #FFFFFF; --stripe: rgba(196, 206, 212, .16);
@@ -200,6 +201,41 @@ details.adv .form { padding: 0; }
 .customct { display: grid; gap: 14px; }
 th.cg { border-left: 1px solid var(--line); }
 td.cg { border-left: 1px solid var(--line); }
+.drivers { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 12px; }
+.drivers h3, .why h4 { margin: 0; font-family: var(--f-display); font-style: italic; font-size: 17px; text-transform: uppercase; letter-spacing: .03em; }
+.drv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.drv { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; background: var(--sunk); }
+.drv .k { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
+.drv .v { font-family: var(--f-display); font-size: 22px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.drv p { margin: 0; font-size: 12.5px; color: var(--muted); }
+.drv p b { color: var(--ink); font-weight: 600; }
+.imp { display: grid; gap: 3px; font-size: 12.5px; }
+.imp div { display: grid; grid-template-columns: minmax(0, 1fr) 54px 88px; gap: 8px; align-items: center; }
+.imp span.nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp .bar { height: 8px; position: relative; background: var(--line); border-radius: 4px; overflow: hidden; }
+.imp .bar i { position: absolute; top: 0; bottom: 0; }
+.imp .num { font-family: var(--f-data); font-size: 12px; text-align: right; }
+button.why-btn { border: 1px solid var(--line); background: var(--panel); border-radius: 5px; font-size: 12px; font-weight: 600; padding: 3px 8px; color: var(--accent); }
+button.why-btn[aria-expanded="true"] { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
+tr.why-row > td { background: var(--sunk); white-space: normal; padding: 12px 14px; }
+.why { display: grid; gap: 14px; max-width: 900px; }
+.why-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.why-grid > div { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.chips2 { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip2 { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.chip2 b { font-family: var(--f-data); font-weight: 500; }
+.chip2.good { border-color: color-mix(in srgb, var(--lock) 50%, transparent); }
+.chip2.bad { border-color: color-mix(in srgb, var(--excl) 50%, transparent); }
+.money { display: flex; height: 14px; border-radius: 4px; overflow: hidden; background: var(--line); }
+.money i { display: block; height: 100%; }
+.mlegend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); }
+.mlegend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; background: var(--c); vertical-align: -1px; }
+.mrow { display: grid; gap: 4px; }
+.mrow .t { font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+.mrow .t b { font-weight: 600; }
+table.carry { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.carry th { position: static; background: none; padding: 4px 6px; }
+table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .simnote { padding: 10px 14px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .simnote b { color: var(--ink); font-weight: 600; }
 .keep { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
@@ -386,7 +422,7 @@ td.cg { border-left: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v6</p>
+<p class="ver" id="ver">Swish v7</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -773,7 +809,12 @@ async function contestSim(siteKey, sim, mine, field, { entries, fee, payouts, on
   const fW = field.lineups.map(l => l.w * Math.max(0, entries - 1));
   const mCols = mine.map(l => l.map(k => sim.idx.get(k)));
   const M = mine.length, F = fCols.length;
-  const res = mine.map(() => ({ scores: new Float32Array(sim.iters), payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0 }));
+  const res = mine.map(l => ({ scores: new Float32Array(sim.iters), payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0,
+    bk: { win: 0, top1: 0, top10: 0, cash: 0 }, topN: 0, topSum: new Float64Array(l.length) }));
+  // expected exact duplicates of each of your lineups among the other entrants
+  const sigOf = keys => sd ? keys[0] + '|' + keys.slice(1).sort().join(',') : keys.slice().sort().join(',');
+  const fieldSig = new Map(); field.lineups.forEach((l, j) => { const g = sigOf(l.keys); fieldSig.set(g, (fieldSig.get(g) || 0) + fW[j]); });
+  const top10 = Math.max(1, entries * 0.1);
   const fs = new Float64Array(F), order = new Uint32Array(F), cum = new Float64Array(F);
   const top1 = Math.max(1, entries * 0.01);
   let last = performance.now();
@@ -793,6 +834,8 @@ async function contestSim(siteKey, sim, mine, field, { entries, fee, payouts, on
       r.rankSum += rank;
       const p = payRange(rank, rankEnd);
       r.payout += p; if (rank <= paidMax) r.cash++; if (rank <= top1) r.top1++; if (above < 0.5) r.win += 1 / Math.max(1, rankEnd - rank + 1);
+      if (p > 0) { if (rank === 1) r.bk.win += p; else if (rank <= top1) r.bk.top1 += p; else if (rank <= top10) r.bk.top10 += p; else r.bk.cash += p; }
+      if (rank <= top1) { r.topN++; const o = it * sim.n, c = mCols[m]; for (let k = 0; k < c.length; k++) r.topSum[k] += sim.data[o + c[k]] * (sd && k === 0 ? 1.5 : 1); }
     }
     if (performance.now() - last > 40) { onProgress && onProgress(it / sim.iters); await tick(); last = performance.now(); }
   }
@@ -802,7 +845,9 @@ async function contestSim(siteKey, sim, mine, field, { entries, fee, payouts, on
     const mean = s.reduce((a, b) => a + b, 0) / N;
     const avgPay = r.payout / N;
     return { mean, p10: q(0.1), p50: q(0.5), p90: q(0.9), p99: q(0.99), avgPay, roi: fee ? (avgPay - fee) / fee * 100 : 0,
-      cash: r.cash / N * 100, top1: r.top1 / N * 100, win: r.win / N * 100, avgRank: r.rankSum / N };
+      cash: r.cash / N * 100, top1: r.top1 / N * 100, win: r.win / N * 100, avgRank: r.rankSum / N,
+      bk: { win: r.bk.win / N, top1: r.bk.top1 / N, top10: r.bk.top10 / N, cash: r.bk.cash / N },
+      dups: fieldSig.get(sigOf(mine[res.indexOf(r)])) || 0, topN: r.topN, topAvg: r.topN ? Array.from(r.topSum, x => x / r.topN) : null };
   });
 }
 
@@ -846,7 +891,7 @@ function tableFrom(rows, test) {
 
 // ===== state =====
 const S = {
-  mainView: 'opt', simTab: 'mine', simSort: { key: 'c0.roi', dir: -1 }, simPSort: { key: 'opt', dir: -1 }, sim: null,
+  mainView: 'opt', simTab: 'mine', whyOpen: null, simSort: { key: 'c0.roi', dir: -1 }, simPSort: { key: 'opt', dir: -1 }, sim: null,
   site: 'dk', players: [], source: 'sample', fileName: '', gamesOff: new Set(), pos: 'ALL', view: 'all', q: '',
   sort: { key: 'salary', dir: -1 }, lineups: [], builtSite: null, tab: 'lineups',
 };
@@ -1436,7 +1481,13 @@ async function runSim() {
         per.push(await contestSim(S.site, sim, keys, field, { entries: c.entries, fee: c.fee, payouts: c.payouts, onProgress: f => simProgress({ from: 75 + 25 * ci / contests.length, to: 75 + 25 * (ci + 1) / contests.length }, f) }));
       }
       mine = mineL.map((_, i) => { const b = per[0][i]; return { mean: b.mean, p10: b.p10, p50: b.p50, p90: b.p90, p99: b.p99, c: per.map(r => r[i]) }; });
+      S.whyOpen = null;
     }
+    // what the average opponent looks like, for the drivers breakdown
+    const pj = new Map(pool.map(p => [p.key, p]));
+    let fw = 0, fProj = 0, fOwn = 0;
+    for (const l of field.lineups) { fw += l.w; fProj += l.w * l.keys.reduce((a, k, j) => a + (pj.get(k)?.proj || 0) * (site.showdown && j === 0 ? 1.5 : 1), 0); fOwn += l.w * l.keys.reduce((a, k) => a + (pj.get(k)?.own || 0), 0); }
+    const fieldAvg = { proj: fProj / fw, own: fOwn / fw };
     // player-level distributions
     const players = pool.map(p => {
       const c = sim.idx.get(p.key); const arr = new Float32Array(sim.iters); let boom = 0; const bl = boomLine(p);
@@ -1448,13 +1499,89 @@ async function runSim() {
         opt: optPct, cpt: cptPct, own: p.own || 0, field: field.realized[p.key] || 0, lev: optPct == null ? null : optPct - (p.own || 0) };
     });
     S.sim = { sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c),
-      players, opt, mine, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
+      players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
     if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
     msg(`Done in ${S.sim.seconds.toFixed(1)}s.`);
   } catch (e) { notify('err', 'The simulation hit an error: ' + esc(e.message)); msg('Simulation stopped.'); }
   simming = false; $('#simBtn').disabled = false; $('#simBtn').textContent = 'Run simulation'; $('#simProg').style.width = '100%';
   renderSim();
   if (S.sim && matchMedia('(max-width: 980px)').matches) document.querySelector('section[aria-label="Simulation results"]').scrollIntoView({ block: 'start' });
+}
+
+// ----- ROI drivers -----
+function corr(xs, ys) {
+  const n = xs.length; if (n < 3) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < n; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+  return sxx && syy ? sxy / Math.sqrt(sxx * syy) : null;
+}
+const strength = r => r == null ? 'n/a' : Math.abs(r) >= 0.6 ? 'strongly' : Math.abs(r) >= 0.3 ? 'moderately' : 'barely';
+const ownSum = l => l.reduce((a, p) => a + (p.own || 0), 0);
+const sgnPct = x => (x >= 0 ? '+' : '') + Math.round(x) + '%';
+const sgn1 = x => (x >= 0 ? '+' : '') + f1(x);
+
+function driversHTML(R, rows, avgRoi) {
+  const site = SITES[R.site]; const F = R.fieldAvg; if (!F || !rows.length) return '';
+  const projs = rows.map(r => r.proj), owns = rows.map(r => ownSum(r.l)), rois = rows.map(avgRoi);
+  const avgProj = projs.reduce((a, b) => a + b, 0) / rows.length, avgOwn = owns.reduce((a, b) => a + b, 0) / rows.length;
+  const edge = avgProj - F.proj;
+  const rP = corr(projs, rois), rO = corr(owns, rois);
+  // player impact: average ROI of your lineups with vs. without each player
+  const cnt = new Map();
+  rows.forEach((r, i) => r.l.forEach(p => { const e = cnt.get(p.key) || { p, with: [], }; e.with.push(rois[i]); cnt.set(p.key, e); }));
+  const total = rois.reduce((a, b) => a + b, 0);
+  const imp = [...cnt.values()].filter(e => e.with.length >= 2 && e.with.length <= rows.length - 2).map(e => {
+    const w = e.with.reduce((a, b) => a + b, 0) / e.with.length, wo = (total - e.with.reduce((a, b) => a + b, 0)) / (rows.length - e.with.length);
+    return { p: e.p, n: e.with.length, d: w - wo };
+  }).sort((a, b) => b.d - a.d);
+  const shown = imp.length > 10 ? imp.slice(0, 5).concat(imp.slice(-5)) : imp;
+  const maxD = Math.max(1, ...shown.map(x => Math.abs(x.d)));
+  const impHTML = shown.length ? `<div class="imp">${shown.map(x => `<div><span class="nm">${esc(x.p.name)} <small class="pos">${x.n}/${rows.length}</small></span><span class="num ${x.d >= 0 ? 'pos-val' : 'neg-val'}">${sgnPct(x.d)}</span><span class="bar"><i style="${x.d >= 0 ? 'left:50%' : `right:50%`};width:${(Math.abs(x.d) / maxD * 50).toFixed(1)}%;background:${x.d >= 0 ? 'var(--lock)' : 'var(--excl)'}"></i></span></div>`).join('')}</div>`
+    : `<p>Build at least 4 lineups with some variety to compare players.</p>`;
+  return `<div class="drivers"><h3>What drives your ROI</h3><div class="drv-grid">
+    <div class="drv"><span class="k">Projection edge over the field</span><span class="v ${edge >= 0 ? 'pos-val' : 'neg-val'}">${sgn1(edge)} pts</span>
+      <p>Your lineups average <b>${f1(avgProj)}</b> projected points. The average simulated opponent projects <b>${f1(F.proj)}</b>. This gap is the main source of positive ROI, and it's only real if your projections are sharper than the field's.</p></div>
+    <div class="drv"><span class="k">Ownership</span><span class="v">${Math.round(avgOwn)}% <small style="font-size:14px;color:var(--muted)">vs ${Math.round(F.own)}%</small></span>
+      <p>Your average lineup's total ownership vs. the average opponent's. Lower ownership means fewer people share your outcomes, so your top finishes split less often.</p></div>
+    <div class="drv"><span class="k">Across your ${rows.length} lineups</span><span class="v" style="font-size:17px">ROI tracks projection ${strength(rP)}</span>
+      <p>Higher-projected lineups ${rP == null ? '—' : rP >= 0 ? 'earn more' : 'earn less'} (r = ${rP == null ? 'n/a' : rP.toFixed(2)}). Higher ownership ${rO == null ? 'shows no clear link to ROI' : `${rO <= 0 ? 'goes with lower' : 'goes with higher'} ROI (${Math.abs(rO) >= 0.6 ? 'strong' : Math.abs(rO) >= 0.3 ? 'moderate' : 'weak'} link, r = ${rO.toFixed(2)})`}.</p></div>
+    <div class="drv"><span class="k">Player impact on ROI (avg of contests)</span>${impHTML}
+      <p>Average ROI of your lineups with each player minus those without him.</p></div>
+  </div></div>`;
+}
+
+function whyHTML(R, r) {
+  const site = SITES[R.site]; const sd = !!site.showdown; const F = R.fieldAvg;
+  const own = ownSum(r.l), edge = r.proj - F.proj;
+  const pm = new Map(R.players.map(x => [x.p.key, x]));
+  const chips = [
+    [`Projection ${f1(r.proj)}`, `${sgn1(edge)} vs field`, edge >= 0],
+    [`Ownership ${Math.round(own)}%`, `${sgnPct(own - F.own)} vs field`, own <= F.own],
+    [`Salary`, money(r.l.reduce((a, p, j) => a + (sd && j === 0 ? p.cptSalary : p.salary), 0)), null],
+  ];
+  const C = ['var(--m1)', 'var(--m2)', 'var(--m3)', 'var(--m4)'], L = ['1st place', 'Top 1%', 'Top 10%', 'Min cashes'];
+  const money_ = R.contests.map((c, ci) => {
+    const x = r.c[ci]; const parts = [x.bk.win, x.bk.top1, x.bk.top10, x.bk.cash]; const tot = parts.reduce((a, b) => a + b, 0) || 1;
+    const noTop = (x.bk.top10 + x.bk.cash - c.fee) / c.fee * 100;
+    return `<div class="mrow"><div class="t"><b>${esc(c.name)}</b><span>${roiCell(x.roi)} · ${x.dups >= 0.05 ? `expected duplicates ${f1(x.dups)}` : 'unique in field'}</span></div>
+      <div class="money" title="Average payout ${money(x.avgPay)} per entry">${parts.map((v, k) => `<i style="width:${(v / tot * 100).toFixed(1)}%;background:${C[k]}"></i>`).join('')}</div>
+      <div class="t" style="color:var(--muted)"><span>${parts.map((v, k) => `${L[k]} ${Math.round(v / tot * 100)}%`).join(' · ')}</span></div>
+      <div class="t" style="color:var(--muted)"><span>Without top-1% finishes, ROI would be <b style="color:var(--ink)">${sgnPct(noTop)}</b></span></div></div>`;
+  }).join('');
+  const x0 = r.c[0];
+  const carry = x0.topAvg ? r.l.map((p, j) => {
+    const cpt = sd && j === 0; const d = pm.get(p.key); const base = (d ? d.mean : p.proj) * (cpt ? 1.5 : 1);
+    return { p, cpt, base, top: x0.topAvg[j], lift: x0.topAvg[j] - base };
+  }).sort((a, b) => b.lift - a.lift) : null;
+  const carryHTML = carry ? `<table class="carry"><thead><tr><th>Player</th><th class="n">Own</th><th class="n">Avg</th><th class="n">In top 1%</th><th class="n">Lift</th></tr></thead><tbody>${carry.map(c => `<tr><td>${esc(c.p.name)}${c.cpt ? ' <small class="pos">CPT</small>' : ''}</td><td class="n">${f1(c.p.own || 0)}%</td><td class="n">${f1(c.base)}</td><td class="n">${f1(c.top)}</td><td class="n ${c.lift >= 0 ? 'pos-val' : 'neg-val'}">${sgn1(c.lift)}</td></tr>`).join('')}</tbody></table>
+    <p class="hint" style="margin:0;font-size:12px;color:var(--muted)">From the ${x0.topN.toLocaleString()} replays where this lineup finished top 1% in the ${esc(R.contests[0].name)}. Players at the top had to boom for it to win.</p>`
+    : `<p style="margin:0;font-size:12.5px;color:var(--muted)">This lineup never finished top 1% in ${R.iters.toLocaleString()} replays.</p>`;
+  return `<div class="why">
+    <div class="chips2">${chips.map(([a, b, good]) => `<span class="chip2 ${good == null ? '' : good ? 'good' : 'bad'}">${a} <b>${b}</b></span>`).join('')}</div>
+    <div class="why-grid">
+      <div><h4>Where the money comes from</h4>${money_}<div class="mlegend">${L.map((l, k) => `<span style="--c:${C[k]}">${l}</span>`).join('')}</div></div>
+      <div><h4>Who carries the big finishes</h4>${carryHTML}</div>
+    </div></div>`;
 }
 
 function sortRows(rows, sort, get) {
@@ -1496,14 +1623,17 @@ function renderSim() {
       .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
     if (!/^c\d+\.\w+$/.test(S.simSort.key) && !['i', 'proj', 'mean', 'p99'].includes(S.simSort.key) || /^c(\d+)/.test(S.simSort.key) && +/^c(\d+)/.exec(S.simSort.key)[1] >= CT.length) S.simSort = { key: 'c0.roi', dir: -1 };
     sortRows(rows, S.simSort, val);
+    const avgRoi = r => r.c.reduce((a, x) => a + x.roi, 0) / r.c.length;
+    note.innerHTML += driversHTML(R, rows, avgRoi);
     const lo = Math.min(...rows.map(r => r.p10)), hi = Math.max(...rows.map(r => r.p99)); const X = v => ((v - lo) / (hi - lo || 1) * 100).toFixed(1);
     const cth = (k, t, first) => th(k, t, S.simSort).replace('<th class="sortable n"', `<th class="sortable n${first ? ' cg' : ''}"`);
-    body.innerHTML = `<table class="simt"><thead><tr>${th('i', '#', S.simSort, false)}<th>Lineup</th>${th('proj', 'Proj', S.simSort)}${th('mean', 'Sim avg', S.simSort)}<th>Range (10th–99th)</th>${th('p99', '99th', S.simSort)}` +
+    const ncol = 7 + CT.length * 4;
+    body.innerHTML = `<table class="simt"><thead><tr>${th('i', '#', S.simSort, false)}<th></th><th>Lineup</th>${th('proj', 'Proj', S.simSort)}${th('mean', 'Sim avg', S.simSort)}<th>Range (10th–99th)</th>${th('p99', '99th', S.simSort)}` +
       CT.map((c, ci) => cth(`c${ci}.cash`, `${esc(c.short)}<br>Cash`, true) + cth(`c${ci}.top1`, `${esc(c.short)}<br>Top 1%`) + cth(`c${ci}.win`, `${esc(c.short)}<br>Win`) + cth(`c${ci}.roi`, `${esc(c.short)}<br>ROI`)).join('') + `</tr></thead><tbody>` +
-      rows.map(r => `<tr><td class="rank">${String(r.i + 1).padStart(3, '0')}</td><td class="lnames">${r.l.map((p, j) => site.showdown && j === 0 ? `<span class="c">${esc(lastName(p.name))} (C)</span>` : esc(lastName(p.name))).join(' · ')}</td>
+      rows.map(r => `<tr><td class="rank">${String(r.i + 1).padStart(3, '0')}</td><td><button class="why-btn" data-why="${r.i}" aria-expanded="${S.whyOpen === r.i}">Why</button></td><td class="lnames">${r.l.map((p, j) => site.showdown && j === 0 ? `<span class="c">${esc(lastName(p.name))} (C)</span>` : esc(lastName(p.name))).join(' · ')}</td>
         <td class="n">${f1(r.proj)}</td><td class="n">${f1(r.mean)}</td>
         <td><span class="dist" title="10th ${f1(r.p10)} · median ${f1(r.p50)} · 90th ${f1(r.p90)} · 99th ${f1(r.p99)}"><i style="left:${X(r.p10)}%;width:${(X(r.p99) - X(r.p10)).toFixed(1)}%"></i><b style="left:${X(r.p10)}%;width:${(X(r.p90) - X(r.p10)).toFixed(1)}%"></b><u style="left:${X(r.p50)}%"></u></span></td>
-        <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.win)}</td><td class="n">${roiCell(x.roi)}</td>`).join('') + `</tr>`).join('') + '</tbody></table>';
+        <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.win)}</td><td class="n">${roiCell(x.roi)}</td>`).join('') + `</tr>` + (S.whyOpen === r.i ? `<tr class="why-row"><td colspan="${ncol}">${whyHTML(R, r)}</td></tr>` : '')).join('') + '</tbody></table>';
     foot.hidden = false;
     foot.innerHTML = `<span class="meta">Keep your strongest lineups and drop the rest. This changes the set you export on the Optimizer tab.</span>
       <span class="keep">Keep top <input type="number" id="keepN" min="1" max="${rows.length}" value="${Math.max(1, Math.round(rows.length / 2))}" aria-label="Number of lineups to keep"> by</span>
@@ -1514,7 +1644,7 @@ function renderSim() {
       const score = r => by === 'avgroi' ? r.c.reduce((a, x) => a + x.roi, 0) / r.c.length : val(r, by);
       const ranked = R.mine.map((r, i) => ({ r, i })).sort((a, b) => score(b.r) - score(a.r)).slice(0, n);
       R.mine = ranked.map(x => x.r); R.mineLineups = ranked.map(x => R.mineLineups[x.i]);
-      S.lineups = R.mineLineups.slice(); S.builtSite = S.site; R.mineStale = false;
+      S.lineups = R.mineLineups.slice(); S.builtSite = S.site; R.mineStale = false; S.whyOpen = null;
       notify('ok', `Kept your top <b>${n}</b> lineups by ${$('#keepBy').selectedOptions[0].text}. They're now the set on the Optimizer tab and in your export.`);
       renderPool(); renderResults(); renderSim();
     };
@@ -1550,6 +1680,8 @@ function renderSim() {
 document.querySelector('.views').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (!b) return; S.mainView = b.dataset.view; renderSim(); });
 $('#simTabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (!b) return; S.simTab = b.dataset.tab; renderSim(); });
 $('#simBody').addEventListener('click', e => {
+  const wb = e.target.closest('[data-why]');
+  if (wb) { const i = +wb.dataset.why; S.whyOpen = S.whyOpen === i ? null : i; renderSim(); return; }
   const t = e.target.closest('th.sortable'); if (!t) return; const k = t.dataset.k;
   const sort = S.simTab === 'players' ? S.simPSort : S.simSort;
   if (sort.key === k) sort.dir = -sort.dir; else { sort.key = k; sort.dir = k === 'name' || k === 'i' ? 1 : -1; }
