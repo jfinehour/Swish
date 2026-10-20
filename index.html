@@ -301,6 +301,7 @@ details.adv .form { padding: 0; }
   <div class="scroll" id="resBody"></div>
   <div class="foot">
     <span class="meta" id="exportMeta"></span>
+    <button class="btn" id="goSim">Simulate these lineups</button>
     <button class="btn" id="copyCsv">Copy upload CSV</button>
     <button class="btn primary" id="saveCsv" hidden>Download upload CSV</button>
   </div>
@@ -1469,6 +1470,7 @@ $('#simBody').addEventListener('click', e => {
   renderSim();
 });
 $('#simBtn').addEventListener('click', runSim);
+$('#goSim').addEventListener('click', () => { S.mainView = 'sim'; S.simTab = 'mine'; renderSim(); scrollTo({ top: 0 }); runSim(); });
 [['sharp', 'sharpOut'], ['gameCorr', 'gameOut'], ['teamCorr', 'teamOut']].forEach(([i, o]) => { const f = () => $('#' + o).textContent = $('#' + i).value + '%'; $('#' + i).addEventListener('input', f); f(); });
 
 restore();
