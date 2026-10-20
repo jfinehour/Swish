@@ -86,7 +86,6 @@ input[type=file] { display: none; }
 .notice .x { margin-left: auto; border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 2px; }
 
 .app { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
-@media (max-width: 980px) { .app { grid-template-columns: minmax(0, 1fr); } .rail { order: -1; position: static; } }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
 .panel-h { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .panel-h h2 { font-family: var(--f-display); font-size: 20px; font-weight: 700; font-style: italic; text-transform: uppercase; letter-spacing: .03em; margin: 0; }
@@ -210,6 +209,13 @@ td.cg { border-left: 1px solid var(--line); }
 .dist u { position: absolute; top: 0; width: 2px; height: 10px; background: var(--ink); }
 .drop { position: fixed; inset: 0; color: var(--ink); background: color-mix(in srgb, var(--bg) 85%, transparent); border: 3px dashed var(--accent); display: grid; place-items: center; z-index: 50; font-family: var(--f-display); font-size: 28px; text-transform: uppercase; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* phones and tablets: one column, settings scroll away normally, tables don't trap the swipe */
+@media (max-width: 980px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { order: -1; position: static; top: auto; }
+  .scroll { max-height: none; }
+  section[aria-label="Player pool"] .scroll { max-height: 60vh; }
+}
 @media (max-width: 560px) { .brand h1 { font-size: 30px; } .brand svg { width: 46px; height: 46px; } .scroll { max-height: 520px; } }
 </style>
 </head>
@@ -1445,6 +1451,7 @@ async function runSim() {
   } catch (e) { notify('err', 'The simulation hit an error: ' + esc(e.message)); msg('Simulation stopped.'); }
   simming = false; $('#simBtn').disabled = false; $('#simBtn').textContent = 'Run simulation'; $('#simProg').style.width = '100%';
   renderSim();
+  if (S.sim && matchMedia('(max-width: 980px)').matches) document.querySelector('section[aria-label="Simulation results"]').scrollIntoView({ block: 'start' });
 }
 
 function sortRows(rows, sort, get) {
