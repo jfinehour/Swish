@@ -245,6 +245,16 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .dist b { position: absolute; top: 1px; height: 8px; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 2px; }
 .dist u { position: absolute; top: 0; width: 2px; height: 10px; background: var(--ink); }
 .ver { margin: 24px 0 0; text-align: center; font-family: var(--f-data); font-size: 11px; color: var(--muted); }
+.vlist { display: grid; gap: 8px; }
+.vrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); }
+.vrow .vt, .vrow .vi { grid-column: 1 / -1; font-size: 13px; }
+.vrow .vi { font-size: 12px; color: var(--muted); font-family: var(--f-data); }
+.vrow .vi b { color: var(--ink); font-weight: 500; }
+.vrow label { display: grid; gap: 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.vrow input.n { width: 100%; background: var(--panel); border: 1px solid var(--line); }
+.vmsg.ok { color: var(--lock); }
+.vmsg.err { color: var(--excl); }
+.vadj { display: block; font-family: var(--f-data); font-size: 10.5px; color: var(--accent); }
 .drop { position: fixed; inset: 0; color: var(--ink); background: color-mix(in srgb, var(--bg) 85%, transparent); border: 3px dashed var(--accent); display: grid; place-items: center; z-index: 50; font-family: var(--f-display); font-size: 28px; text-transform: uppercase; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 /* phones and tablets: one column, settings scroll away normally, tables don't trap the swipe */
@@ -342,6 +352,19 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
       </div>
       <div class="rules" id="rules"></div>
     </section>
+    <section class="panel" aria-label="Vegas lines">
+      <div class="panel-h"><h2>Vegas lines</h2><span class="meta">The Odds API</span></div>
+      <div class="form">
+        <div class="field"><label for="oddsKey">API key</label>
+          <input type="password" id="oddsKey" autocomplete="off" placeholder="Paste your key" style="width:100%;border:1px solid var(--line);background:var(--sunk);border-radius:6px;padding:6px 9px;font-family:var(--f-data);font-size:13px">
+          <button class="btn primary" id="pullOdds" style="justify-content:center">Pull lines</button>
+          <span class="hint vmsg" id="oddsMsg">Each pull uses 2 credits (spreads + totals). Your key stays on this device.</span></div>
+        <div id="vegasGames"></div>
+        <label class="check"><input type="checkbox" id="vegasAdj"> Adjust projections to Vegas</label>
+        <div class="field" id="vegasWBox"><label for="vegasW">Adjustment strength <output id="vegasWOut">50%</output></label><input type="range" id="vegasW" min="0" max="100" step="5" value="50">
+          <span class="hint">Raises players on teams with high implied totals and lowers those with low ones. Leave this off if your projections already account for Vegas.</span></div>
+      </div>
+    </section>
   </aside>
 </div>
 
@@ -406,6 +429,8 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
         <div class="field"><label for="sharp">Optimizer users in field <output id="sharpOut">35%</output></label><input type="range" id="sharp" min="0" max="70" step="5" value="35">
           <span class="hint">The rest of the field picks players in line with projected ownership.</span></div>
         <label class="check"><input type="checkbox" id="doOpt" checked> Find sim-optimal lineups</label>
+        <label class="check"><input type="checkbox" id="simVegas" checked> Use Vegas lines in sims</label>
+        <span class="hint" style="font-size:12px;color:var(--muted);margin-top:-8px">High totals swing together more, and big spreads raise the chance of a blowout that sits starters. Needs lines from the Optimizer tab.</span>
         <details class="adv"><summary>Correlation</summary>
           <div class="form">
             <div class="field"><label for="gameCorr">Game shared variance <output id="gameOut">16%</output></label><input type="range" id="gameCorr" min="0" max="35" step="1" value="16">
@@ -437,7 +462,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v9</p>
+<p class="ver" id="ver">Swish v10</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -640,26 +665,60 @@ function playerDist(p) {
 
 // players: unique players [{key, team, game, proj, ceil, floor}]
 // Returns { iters, n, idx: Map key->col, data: Float32Array(iters*n) }
-async function simulateScores(players, { iters = 1000, seed = 1, teamW = 0.08, gameW = 0.16, onProgress } = {}) {
+// vegas (optional): { [team]: { total, spread, opp } } with spread from that team's side (favorite negative).
+// Higher totals get more shared game variance; each replay draws a final margin around the
+// spread, and lopsided margins cut starters' minutes while bench players soak them up.
+// Each player's simulated average is then re-centered on his projection.
+async function simulateScores(players, { iters = 1000, seed = 1, teamW = 0.08, gameW = 0.16, vegas = null, onProgress } = {}) {
   const rng = mulberry32(seed);
   const n = players.length, data = new Float32Array(iters * n);
   const dist = players.map(playerDist);
   const teams = [...new Set(players.map(p => p.team))], games = [...new Set(players.map(p => p.game))];
   const tIdx = players.map(p => teams.indexOf(p.team)), gIdx = players.map(p => games.indexOf(p.game));
-  const iw = Math.sqrt(Math.max(0, 1 - teamW - gameW)), tw = Math.sqrt(teamW), gw = Math.sqrt(gameW);
   const tS = new Float64Array(teams.length), gS = new Float64Array(games.length);
+  // per-game variance weights and blowout setup
+  const gw2 = games.map(() => gameW);
+  const gInfo = games.map(() => null);
+  if (vegas) {
+    const tot = games.map(g => { const t = players.find(p => p.game === g); const v = t && vegas[t.team]; return v && v.total ? v.total : null; });
+    const known = tot.filter(x => x); const avg = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 0;
+    games.forEach((g, gi) => {
+      if (tot[gi] && avg) gw2[gi] = Math.min(0.32, Math.max(0.06, gameW * Math.pow(tot[gi] / avg, 3)));
+      const ps = players.filter(p => p.game === g); const tA = ps[0] && ps[0].team; const v = tA && vegas[tA];
+      if (v && v.spread != null) gInfo[gi] = { teamA: teams.indexOf(tA), teamB: teams.indexOf(v.opp), mean: -v.spread };
+    });
+  }
+  // starters = each team's top five projections
+  const starter = new Uint8Array(n);
+  for (const t of teams) players.map((p, i) => [p, i]).filter(([p]) => p.team === t).sort((x, y) => y[0].proj - x[0].proj).slice(0, 5).forEach(([, i]) => starter[i] = 1);
+  const margin = new Float64Array(games.length);
   let last = performance.now();
   for (let it = 0; it < iters; it++) {
     for (let t = 0; t < teams.length; t++) tS[t] = zOf(rng);
     for (let g = 0; g < games.length; g++) gS[g] = zOf(rng);
+    for (let g = 0; g < games.length; g++) {
+      const G = gInfo[g]; if (!G) { margin[g] = 0; continue; }
+      const tilt = G.teamB >= 0 ? (tS[G.teamA] - tS[G.teamB]) / Math.SQRT2 : 0;
+      margin[g] = G.mean + 12 * (0.45 * tilt + 0.893 * zOf(rng)); // margin from team A's side
+    }
     const o = it * n;
     for (let i = 0; i < n; i++) {
       const d = dist[i]; if (!d.m) { data[o + i] = 0; continue; }
-      const z = iw * zOf(rng) + tw * tS[tIdx[i]] + gw * gS[gIdx[i]];
+      const gw = gw2[gIdx[i]], iw = Math.sqrt(Math.max(0, 1 - teamW - gw));
+      const z = iw * zOf(rng) + Math.sqrt(teamW) * tS[tIdx[i]] + Math.sqrt(gw) * gS[gIdx[i]];
       const raw = z < 0 ? d.m + z * d.lo : d.m + z * d.hi;
-      data[o + i] = Math.max(0, raw - d.bias);
+      let v = Math.max(0, raw - d.bias);
+      if (gInfo[gIdx[i]]) {
+        const over = Math.abs(margin[gIdx[i]]) - 12;
+        if (over > 0) v *= starter[i] ? 1 - Math.min(0.3, 0.015 * over) : 1 + Math.min(0.45, 0.025 * over);
+      }
+      data[o + i] = v;
     }
     if (performance.now() - last > 40) { onProgress && onProgress(it / iters); await tick(); last = performance.now(); }
+  }
+  if (vegas) for (let i = 0; i < n; i++) { // keep each player's average on his projection
+    if (!dist[i].m) continue; let sum = 0; for (let it = 0; it < iters; it++) sum += data[it * n + i];
+    const f = sum > 0 ? dist[i].m * iters / sum : 1; for (let it = 0; it < iters; it++) data[it * n + i] *= f;
   }
   return { iters, n, idx: new Map(players.map((p, i) => [p.key, i])), data };
 }
@@ -920,6 +979,102 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress) 
         bk: { win: r.bk.win / N, top1: r.bk.top1 / N, top10: r.bk.top10 / N, cash: r.bk.cash / N },
         dups: dupW * CS[ci].E, topN: r.topN, topAvg: r.topN ? Array.from(r.topSum, x => x / r.topN) : null }; }) };
   });
+}
+
+// ===== Vegas lines (The Odds API) =====
+const NBA_TEAMS = { 'Atlanta Hawks': 'ATL', 'Boston Celtics': 'BOS', 'Brooklyn Nets': 'BKN', 'Charlotte Hornets': 'CHA', 'Chicago Bulls': 'CHI', 'Cleveland Cavaliers': 'CLE', 'Dallas Mavericks': 'DAL', 'Denver Nuggets': 'DEN', 'Detroit Pistons': 'DET', 'Golden State Warriors': 'GSW', 'Houston Rockets': 'HOU', 'Indiana Pacers': 'IND', 'Los Angeles Clippers': 'LAC', 'LA Clippers': 'LAC', 'Los Angeles Lakers': 'LAL', 'Memphis Grizzlies': 'MEM', 'Miami Heat': 'MIA', 'Milwaukee Bucks': 'MIL', 'Minnesota Timberwolves': 'MIN', 'New Orleans Pelicans': 'NOP', 'New York Knicks': 'NYK', 'Oklahoma City Thunder': 'OKC', 'Orlando Magic': 'ORL', 'Philadelphia 76ers': 'PHI', 'Phoenix Suns': 'PHX', 'Portland Trail Blazers': 'POR', 'Sacramento Kings': 'SAC', 'San Antonio Spurs': 'SAS', 'Toronto Raptors': 'TOR', 'Utah Jazz': 'UTA', 'Washington Wizards': 'WAS' };
+const TEAM_ALIAS = { GS: 'GSW', NY: 'NYK', SA: 'SAS', NO: 'NOP', PHO: 'PHX', BRK: 'BKN', BK: 'BKN', CHO: 'CHA', UTAH: 'UTA', WSH: 'WAS', LA: 'LAC', NOR: 'NOP' };
+const canon = t => TEAM_ALIAS[t] || t;
+// slate games as [teamA, teamB] pairs, keyed by the players' game field
+function slateGames() {
+  const m = new Map();
+  for (const p of S.players) { if (!m.has(p.game)) m.set(p.game, new Set()); m.get(p.game).add(p.team); if (p.opp) m.get(p.game).add(p.opp); }
+  return [...m.entries()].map(([g, set]) => ({ game: g, teams: [...set].slice(0, 2) })).filter(x => x.teams.length === 2);
+}
+const pairKey = (a, b) => [canon(a), canon(b)].sort().join('-');
+const median = a => { const s = a.slice().sort((x, y) => x - y); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : null; };
+// S.vegas: { [pairKey]: { home, away, total, homeSpread, books, src } }
+function vegasFor(team) {
+  if (!S.vegas) return null;
+  for (const g of slateGames()) {
+    if (!g.teams.includes(team)) continue;
+    const v = S.vegas[pairKey(g.teams[0], g.teams[1])]; if (!v || !v.total) return null;
+    const opp = g.teams.find(t => t !== team);
+    const isHome = canon(team) === v.home;
+    const spread = v.homeSpread == null ? null : isHome ? v.homeSpread : -v.homeSpread;
+    return { total: v.total, spread, opp, implied: spread == null ? v.total / 2 : (v.total - spread) / 2 };
+  }
+  return null;
+}
+function vegasMap() {
+  const m = {}; let any = false;
+  for (const t of new Set(S.players.map(p => p.team))) { const v = vegasFor(t); if (v) { m[t] = v; any = true; } }
+  return any ? m : null;
+}
+// Projection after the optional Vegas adjustment (team implied total vs. slate average).
+function vegasProjFactor(team, vm, w) {
+  const v = vm && vm[team]; if (!v || !w) return 1;
+  const imps = Object.values(vm).map(x => x.implied); const avg = imps.reduce((a, b) => a + b, 0) / imps.length;
+  return Math.min(1.15, Math.max(0.85, 1 + w * (v.implied / avg - 1) * 1.2));
+}
+function withVegas(players, st) {
+  const vm = vegasMap(); const w = st.vegasAdj && vm ? (st.vegasW ?? 50) / 100 : 0;
+  if (!w) return players;
+  return players.map(p => { const f = vegasProjFactor(p.team, vm, w); return f === 1 ? p : { ...p, proj: +(p.proj * f).toFixed(2), ceil: p.ceil ? +(p.ceil * f).toFixed(2) : p.ceil, vf: f }; });
+}
+
+async function pullVegas() {
+  const key = $('#oddsKey').value.trim();
+  if (!key) return vegasMsg('Enter your Odds API key first. You can get a free key at the-odds-api.com.', 'err');
+  try { localStorage.setItem('swish:oddsKey', key); } catch (e) {}
+  $('#pullOdds').disabled = true; vegasMsg('Pulling lines…');
+  try {
+    const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey=${encodeURIComponent(key)}&regions=us&markets=spreads,totals&oddsFormat=american`;
+    const res = await fetch(url);
+    const left = res.headers.get('x-requests-remaining');
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      const why = res.status === 401 ? 'The API key was rejected. Check it on your Odds API account page.' : res.status === 429 ? 'Your Odds API quota or rate limit is used up for now.' : `The Odds API returned an error (${res.status}). ${esc(body.slice(0, 140))}`;
+      return vegasMsg(why, 'err');
+    }
+    const events = await res.json();
+    const games = slateGames(); let matched = 0; S.vegas = S.vegas || {};
+    for (const g of games) {
+      const want = pairKey(g.teams[0], g.teams[1]);
+      const ev = events.filter(e => NBA_TEAMS[e.home_team] && NBA_TEAMS[e.away_team] && pairKey(NBA_TEAMS[e.home_team], NBA_TEAMS[e.away_team]) === want)
+        .sort((x, y) => new Date(x.commence_time) - new Date(y.commence_time))[0];
+      if (!ev) continue;
+      const totals = [], spreads = [];
+      for (const bk of ev.bookmakers || []) for (const mk of bk.markets || []) {
+        if (mk.key === 'totals') { const o = mk.outcomes.find(o => o.name === 'Over'); if (o && o.point != null) totals.push(o.point); }
+        if (mk.key === 'spreads') { const o = mk.outcomes.find(o => o.name === ev.home_team); if (o && o.point != null) spreads.push(o.point); }
+      }
+      if (!totals.length && !spreads.length) continue;
+      S.vegas[want] = { home: NBA_TEAMS[ev.home_team], away: NBA_TEAMS[ev.away_team], total: median(totals), homeSpread: median(spreads), books: (ev.bookmakers || []).length, src: 'api', at: Date.now() };
+      matched++;
+    }
+    save(); render();
+    vegasMsg(`Matched ${matched} of ${games.length} games (consensus of US sportsbooks).${left != null ? ` ${left} API credits left.` : ''}${matched < games.length ? ' Lines may not be posted yet for the rest; you can type them in.' : ''}`, matched ? 'ok' : 'err');
+  } catch (e) {
+    vegasMsg(window.claude ? 'Lines can\'t be pulled inside the Claude preview because outside connections are blocked here. Use the installed app at jfinehour.github.io/Swish, or type the lines in below.' : 'Couldn\'t reach The Odds API. Check your connection and try again, or type the lines in below.', 'err');
+  } finally { $('#pullOdds').disabled = false; }
+}
+function vegasMsg(t, kind) { const el = $('#oddsMsg'); el.textContent = t; el.className = 'hint vmsg ' + (kind || ''); }
+
+function renderVegas() {
+  const games = slateGames(); const box = $('#vegasGames'); if (!box) return;
+  if (!games.length) { box.innerHTML = '<p class="hint">Load a slate to see its games.</p>'; return; }
+  box.innerHTML = `<div class="vlist">` + games.map(g => {
+    const k = pairKey(g.teams[0], g.teams[1]); const v = (S.vegas || {})[k];
+    const [a, b] = g.teams.map(canon).sort();
+    const sideA = v && v.homeSpread != null ? (v.home === a ? v.homeSpread : -v.homeSpread) : '';
+    const ia = vegasFor(g.teams.find(t => canon(t) === a)), ib = vegasFor(g.teams.find(t => canon(t) === b));
+    return `<div class="vrow" data-vk="${k}" data-a="${a}" data-b="${b}">
+      <div class="vt"><b>${a}</b> v <b>${b}</b>${v && v.home ? ` <small class="pos">at ${v.home}</small>` : ''}${v && v.src === 'manual' ? ' <small class="pos">· edited</small>' : ''}</div>
+      <label>Total<input class="n" data-vf="total" type="number" step="0.5" value="${v && v.total != null ? v.total : ''}" placeholder="–"></label>
+      <label>${a} spread<input class="n" data-vf="spread" type="number" step="0.5" value="${sideA}" placeholder="–"></label>
+      <div class="vi">${ia ? `Implied: ${a} <b>${f1(ia.implied)}</b> · ${b} <b>${f1(ib.implied)}</b>` : 'No line yet'}</div></div>`;
+  }).join('') + `</div><span class="hint" style="font-size:12px;color:var(--muted)">Favorite's spread is negative. Edit any number to override the pulled line.</span>`;
 }
 
 // ===== helpers =====
@@ -1212,7 +1367,7 @@ function readFile(file, fn) { const r = new FileReader(); r.onload = () => fn(St
 
 // ===== persistence (per-browser convenience) =====
 function save() {
-  store.set('slate', { site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff] });
+  store.set('slate', { site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null });
   store.set('settings', settings());
 }
 function restore() {
@@ -1224,7 +1379,7 @@ function restore() {
 }
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
-  return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), optFor: $('#optFor').value, skipOut: $('#skipOut').checked,
+  return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), optFor: $('#optFor').value, skipOut: $('#skipOut').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
     simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
@@ -1270,9 +1425,11 @@ function render() {
   renderPool();
   renderResults();
   renderSim();
+  renderVegas();
 }
 
 function renderPool() {
+  const vm = vegasMap(); const stv = settings(); const vw = stv.vegasAdj && vm ? (stv.vegasW ?? 50) / 100 : 0;
   const site = SITES[S.site];
   const exp = expCounts(); const N = S.lineups.length;
   const q = S.q.toLowerCase();
@@ -1293,9 +1450,9 @@ function renderPool() {
       <td><span class="tg"><button class="l" data-act="lock" aria-pressed="${p.lock}" aria-label="Lock ${esc(p.name)}" title="Lock">L</button><button class="x" data-act="excl" aria-pressed="${p.excl}" aria-label="Exclude ${esc(p.name)}" title="Exclude">X</button></span></td>
       <td><span class="pname">${esc(p.name)}</span>${tag}</td>
       <td class="pos">${p.pos.join('/')}</td>
-      <td class="team">${esc(p.team)} <small>v ${esc(p.opp)}</small></td>
+      <td class="team">${esc(p.team)} <small>v ${esc(p.opp)}</small>${vm && vm[p.team] ? `<br><small>${f1(vm[p.team].implied)} implied</small>` : ''}</td>
       <td class="n">${money(p.salary)}${sdNote ? `<br><small class="pos">CPT ${money(p.cptSalary)}</small>` : ''}</td>
-      <td class="n"><input class="n${p.proj !== p.base ? ' edited' : ''}" data-f="proj" type="number" step="0.1" value="${p.proj}" aria-label="Projection for ${esc(p.name)}"></td>
+      <td class="n"><input class="n${p.proj !== p.base ? ' edited' : ''}" data-f="proj" type="number" step="0.1" value="${p.proj}" aria-label="Projection for ${esc(p.name)}">${vw && vm && vm[p.team] && p.proj ? `<span class="vadj">Vegas ${f1(p.proj * vegasProjFactor(p.team, vm, vw))}</span>` : ''}</td>
       <td class="n">${p.ceil ? f1(p.ceil) : '<span class="pos">–</span>'}</td>
       <td class="n ${v >= (S.site === 'fd' ? 5.2 : 5.6) ? 'val-hi' : ''}">${v.toFixed(2)}</td>
       <td class="n"><input class="n sm" data-f="own" type="number" step="0.5" min="0" value="${p.own}" aria-label="Ownership for ${esc(p.name)}"></td>
@@ -1348,7 +1505,7 @@ async function build() {
   const site = SITES[S.site]; const st = settings();
   const N = Math.max(1, Math.min(300, Math.round(st.nLineups || 1)));
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
-  const pool = S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && (p.proj > 0 || p.lock));
+  const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && (p.proj > 0 || p.lock)), st);
   const locks = S.players.filter(p => p.lock && !p.excl && !S.gamesOff.has(p.game)).map(p => p.key);
   if (locks.length > site.size) return notify('err', `You locked ${locks.length} players but a lineup holds ${site.size}.`);
   const maxExp = {}, minExp = {};
@@ -1538,7 +1695,8 @@ async function runSim(mode) {
   if (simming || building) return;
   const buildBest = mode === 'best';
   const site = SITES[S.site]; const st = settings();
-  const pool = S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0);
+  const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0), st);
+  const vmap = st.simVegas ? vegasMap() : null;
   if (pool.length < site.size) return notify('err', 'Not enough players with projections to simulate.');
   const iters = +st.simIters || 1000;
   const contests = selectedContests(st);
@@ -1549,7 +1707,7 @@ async function runSim(mode) {
   const t0 = performance.now(); const msg = t => $('#simMsg').textContent = t;
   try {
     msg('Replaying the slate…');
-    const sim = await simulateScores(pool, { iters, seed: (Date.now() % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, onProgress: prog('sim') });
+    const sim = await simulateScores(pool, { iters, seed: (Date.now() % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap, onProgress: prog('sim') });
     let opt = null;
     if (st.doOpt) {
       msg('Finding the optimal lineup in each replay…');
@@ -1582,8 +1740,8 @@ async function runSim(mode) {
         opt: optPct, cpt: cptPct, own: p.own || 0, field: field.realized[p.key] || 0, lev: optPct == null ? null : optPct - (p.own || 0) };
     });
     let built = null;
-    if (buildBest) built = await buildBestLineups({ site, st, pool, sim, opt, field, contests, iters, msg });
-    S.sim = { sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
+    if (buildBest) built = await buildBestLineups({ site, st, pool, sim, opt, field, contests, iters, msg, vmap });
+    S.sim = { vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
     if (buildBest) S.simTab = 'built'; else if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
     S.whyOpen = null;
@@ -1595,11 +1753,12 @@ async function runSim(mode) {
 }
 
 // ----- sim-built lineups: candidates -> contest screen -> pick -> fresh re-score -----
-async function buildBestLineups({ site, st, pool, sim, opt, field, contests, iters, msg }) {
+async function buildBestLineups({ site, st, pool, sim, opt, field, contests, iters, msg, vmap }) {
   const sd = !!site.showdown;
   const sigOf = l => sd ? l[0].key + '|' + l.slice(1).map(p => p.key).sort().join(',') : l.map(p => p.key).sort().join(',');
   const C = Math.max(30, +st.candN || 300), N = Math.max(1, Math.min(150, Math.round(st.bestN || 20)));
-  const locks = S.players.filter(p => p.lock && pool.includes(p)).map(p => p.key);
+  const poolKeys = new Set(pool.map(p => p.key));
+  const locks = S.players.filter(p => p.lock && poolKeys.has(p.key)).map(p => p.key);
   const mkRows = f => { const rows = []; for (const p of pool) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: f(p), own: p.own || 0, src: p }; if (sd) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); } return rows; };
   const recipes = [
     { n: Math.round(C * 0.4), rows: mkRows(p => p.proj), rand: 15 },
@@ -1636,7 +1795,7 @@ async function buildBestLineups({ site, st, pool, sim, opt, field, contests, ite
     picked.push(x); l.forEach(p => used[p.key] = (used[p.key] || 0) + 1);
   }
   msg(`Re-scoring the top ${picked.length} on fresh replays…`);
-  const simB = await simulateScores(pool, { iters, seed: ((Date.now() * 7) % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, onProgress: f => simProgress({ from: 85, to: 90 }, f) });
+  const simB = await simulateScores(pool, { iters, seed: ((Date.now() * 7) % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap, onProgress: f => simProgress({ from: 85, to: 90 }, f) });
   const lineups = picked.map(x => poolL[x.i]);
   const val = await contestSimMulti(S.site, simB, lineups.map(l => l.map(p => p.key)), field, contests, f => simProgress({ from: 90, to: 100 }, f));
   const avgOf = (arr, f) => arr.reduce((a, r) => a + f(r), 0) / arr.length;
@@ -1742,6 +1901,7 @@ function renderSim() {
   $('#simMeta').textContent = `${R.iters.toLocaleString()} replays · ${R.contests.map(c => c.short).join(' + ')}`;
   const notes = [];
   if (R.sig !== slateSig()) notes.push('<b>Your player pool changed since this run.</b> Run the simulation again to use the new numbers.');
+  if (R.vegas) notes.push(`Vegas lines are shaping this run: game totals set how much each game swings together, and spreads set blowout risk.${R.vegasAdj ? ' Projections were also adjusted to implied team totals.' : ''}`);
   notes.push(`Results assume your projections are right, so treat ROI as a way to compare lineups rather than a forecast. Field: ${R.sharp}% optimizer users, the rest picking by projected ownership. Contests: ${R.contests.map(c => `<b>${esc(c.name)}</b> (${c.entries.toLocaleString()} entries, ${money(c.fee)}, ${money(c.pool)} prizes, top ${c.paid.toLocaleString()} paid${c.source === 'auto' ? ', typical payout curve' : ''})`).join('; ')}.`);
   note.innerHTML = `<div class="simnote">${notes.join('<br>')}</div>`;
   stats.hidden = true; foot.hidden = true;
@@ -1849,6 +2009,18 @@ $('#simBody').addEventListener('click', e => {
 });
 $('#simBtn').addEventListener('click', () => runSim());
 $('#bestBtn').addEventListener('click', () => runSim('best'));
+$('#pullOdds').addEventListener('click', pullVegas);
+try { const k = localStorage.getItem('swish:oddsKey'); if (k) $('#oddsKey').value = k; } catch (e) {}
+$('#vegasGames').addEventListener('change', e => {
+  const i = e.target.closest('input[data-vf]'); if (!i) return; const tr = i.closest('.vrow'); const k = tr.dataset.vk, a = tr.dataset.a, b = tr.dataset.b;
+  S.vegas = S.vegas || {}; const v = S.vegas[k] || { home: a, away: b, total: null, homeSpread: null, src: 'manual' };
+  const x = i.value === '' ? null : +i.value;
+  if (i.dataset.vf === 'total') v.total = x; else v.homeSpread = x == null ? null : (v.home === a ? x : -x);
+  v.src = 'manual'; S.vegas[k] = v; save(); renderPool(); renderVegas();
+});
+const syncVegasW = () => { $('#vegasWOut').textContent = $('#vegasW').value + '%'; $('#vegasWBox').hidden = !$('#vegasAdj').checked; };
+$('#vegasW').addEventListener('input', () => { syncVegasW(); renderPool(); });
+$('#vegasAdj').addEventListener('change', () => { syncVegasW(); renderPool(); });
 const syncCustom = () => { $('#customBox').hidden = !$('#ctCustom').checked; };
 $('#ctCustom').addEventListener('change', syncCustom);
 $('#goSim').addEventListener('click', () => { S.mainView = 'sim'; S.simTab = 'mine'; renderSim(); scrollTo({ top: 0 }); runSim(); });
@@ -1858,6 +2030,7 @@ restore();
 $('#randOut').textContent = $('#rand').value + '%';
 [['sharp', 'sharpOut'], ['gameCorr', 'gameOut'], ['teamCorr', 'teamOut']].forEach(([i, o]) => $('#' + o).textContent = $('#' + i).value + '%');
 syncCustom();
+syncVegasW();
 render();
 </script>
 <script>
