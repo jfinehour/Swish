@@ -389,6 +389,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <div class="contests">
             <label class="ct"><input type="checkbox" id="ctP0" checked><span><b>$12 Single Entry</b><small>980 entries · $10,000 prizes · top 229 paid · 1st $1,000</small></span></label>
             <label class="ct"><input type="checkbox" id="ctP1" checked><span><b>$5 Single Entry</b><small>1,189 entries · $5,000 prizes · top 262 paid · 1st $500</small></span></label>
+            <label class="ct"><input type="checkbox" id="ctP2" checked><span><b>$12 Pick and Roll SE</b><small>490 entries · $5,000 prizes · top 114 paid · 1st $500</small></span></label>
             <label class="ct"><input type="checkbox" id="ctCustom"><span><b>Custom contest</b><small>Your own entries, fee and payouts</small></span></label>
           </div>
         </div>
@@ -422,7 +423,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v7</p>
+<p class="ver" id="ver">Swish v8</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1154,7 +1155,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), optFor: $('#optFor').value, skipOut: $('#skipOut').checked,
-    simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctCustom: $('#ctCustom').checked, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
+    simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctCustom: $('#ctCustom').checked, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
 // ===== notices =====
@@ -1395,7 +1396,7 @@ addEventListener('drop', e => {
 
 // ===== simulation UI =====
 const CONTESTS = [
-  { name: '$12 Single Entry', short: '$12 SE', entries: 980, fee: 12, payouts: `1st $1,000.00
+  { name: '$12 Single Entry', short: '$12 SE-980', entries: 980, fee: 12, payouts: `1st $1,000.00
 2nd $500.00
 3rd $350.00
 4th $250.00
@@ -1428,6 +1429,20 @@ const CONTESTS = [
 36th - 55th $20.00
 56th - 95th $15.00
 96th - 262nd $10.00` },
+  { name: '$12 Pick and Roll SE', short: '$12 SE-490', entries: 490, fee: 12, payouts: `1st $500
+2nd $400
+3rd $300
+4th $200
+5th $150
+6th $125
+7th $100
+8th $80
+9th-10th $60
+11th-15th $50
+16th-20th $40
+21st-30th $35
+31st-55th $30
+56th-114th $25` },
 ];
 function selectedContests(st) {
   const out = [];
