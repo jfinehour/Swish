@@ -13,6 +13,7 @@ It opens full screen, works offline, and saves your slate and settings on each d
 
 ## Using it
 - **Optimizer:** import a DraftKings or FanDuel salary CSV and/or a projections CSV (Name, FPTS, Ceiling, ProjOwn, DKSlateID). Lock, exclude and set exposure per player, then build and export an upload-ready CSV.
+- **Sim-built lineups:** builds a pool of candidate lineups, runs them all through the selected contests, keeps the best by ROI, top-1% or cash rate (respecting your locks, exposure and min-unique settings), and re-scores the picks on fresh replays.
 - **Simulate:** replays the slate with correlated player outcomes, finds how often each player is in the optimal lineup, and runs your lineups through three preset DraftKings single-entry contests ($12 with 980 entries, $5 with 1,189 entries, and $12 Pick and Roll with 490 entries) plus an optional custom contest, against a field built from projected ownership, to estimate cash rate, top-1% rate and ROI for each.
 
 ## Updating

@@ -370,6 +370,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="panel-h"><h2>Simulation</h2><span class="meta" id="simMeta">Not run yet</span>
       <div class="seg" role="tablist" id="simTabs" style="margin-left:auto">
         <button data-tab="mine" aria-pressed="true">Your lineups</button>
+        <button data-tab="built" aria-pressed="false">Sim-built</button>
         <button data-tab="players" aria-pressed="false">Players</button>
         <button data-tab="optimal" aria-pressed="false">Sim optimals</button>
       </div>
@@ -420,10 +421,23 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
         <span class="hint" id="simMsg" style="font-size:12px;color:var(--muted)">Uses the projections, ceilings and ownership in your player pool.</span>
       </div>
     </section>
+      <section class="panel" aria-label="Sim-built lineups">
+      <div class="panel-h"><h2>Sim-built lineups</h2></div>
+      <div class="form">
+        <span class="hint" style="font-size:12.5px;color:var(--muted)">Swish builds a pool of candidate lineups, runs every one through the contests above, and keeps the ones with the best results. The picks are then re-scored on a fresh set of replays, so their numbers aren't inflated by luck.</span>
+        <div class="two">
+          <div class="field"><label for="bestN">Lineups to keep</label><input type="number" id="bestN" min="1" max="150" value="20"></div>
+          <div class="field"><label for="candN">Candidates</label><select id="candN" class="sel"><option value="150">150 (fast)</option><option value="300" selected>300</option><option value="600">600 (slow)</option></select></div>
+        </div>
+        <div class="field"><label for="rankBy">Pick by</label><select id="rankBy" class="sel"><option value="avgroi">Average ROI across contests</option><option value="top1">Top 1% rate</option><option value="cash">Cash rate</option></select></div>
+        <span class="hint" style="font-size:12px;color:var(--muted)">Follows your Optimizer locks, excludes, max per team, min salary, min unique and max exposure.</span>
+      </div>
+      <div class="build"><button class="btn primary" id="bestBtn">Build best simmed lineups</button></div>
+    </section>
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v8</p>
+<p class="ver" id="ver">Swish v9</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -852,6 +866,62 @@ async function contestSim(siteKey, sim, mine, field, { entries, fee, payouts, on
   });
 }
 
+// Scores many lineups in several contests at once. The field is sorted once per
+// replay and shared by every contest; only entry counts and payouts differ.
+async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress) {
+  const site = SITES[siteKey]; const sd = !!site.showdown; const EPS = 1e-3;
+  const CS = contests.map(c => {
+    const pay = payoutArray(c.payouts); const paidMax = pay.length - 2;
+    const cumPay = new Float64Array(pay.length + 1); for (let k = 1; k < pay.length; k++) cumPay[k] = cumPay[k - 1] + pay[k];
+    return { fee: c.fee, paidMax, cumPay, E: Math.max(0, c.entries - 1), top1: Math.max(1, c.entries * 0.01), top10: Math.max(1, c.entries * 0.1) };
+  });
+  const payRange = (C, a, b) => { const hi = Math.min(b, C.paidMax); return hi < a ? 0 : (C.cumPay[hi] - C.cumPay[a - 1]) / (b - a + 1); };
+  const fCols = field.lineups.map(l => l.keys.map(k => sim.idx.get(k)));
+  const fw = field.lineups.map(l => l.w);
+  const sigOf = keys => sd ? keys[0] + '|' + keys.slice(1).sort().join(',') : keys.slice().sort().join(',');
+  const fieldSig = new Map(); field.lineups.forEach((l, j) => { const g = sigOf(l.keys); fieldSig.set(g, (fieldSig.get(g) || 0) + fw[j]); });
+  const mCols = mine.map(l => l.map(k => sim.idx.get(k)));
+  const M = mine.length, F = fCols.length, N = sim.iters;
+  const res = mine.map(l => ({ scores: new Float32Array(N), c: CS.map(() => ({ payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0, bk: { win: 0, top1: 0, top10: 0, cash: 0 }, topN: 0, topSum: new Float64Array(l.length) })) }));
+  const fs = new Float64Array(F), order = new Uint32Array(F), cum = new Float64Array(F);
+  let last = performance.now();
+  for (let it = 0; it < N; it++) {
+    for (let j = 0; j < F; j++) { fs[j] = lineupScore(sim, fCols[j], it, sd); order[j] = j; }
+    order.sort((a, b) => fs[b] - fs[a]);
+    let acc = 0; for (let j = 0; j < F; j++) { acc += fw[order[j]]; cum[j] = acc; }
+    const o = it * sim.n;
+    for (let m = 0; m < M; m++) {
+      const s = lineupScore(sim, mCols[m], it, sd); const R = res[m]; R.scores[it] = s;
+      let lo = 0, hi = F;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (fs[order[mid]] > s + EPS) lo = mid + 1; else hi = mid; }
+      let lo2 = lo, hi2 = F;
+      while (lo2 < hi2) { const mid = (lo2 + hi2) >> 1; if (fs[order[mid]] >= s - EPS) lo2 = mid + 1; else hi2 = mid; }
+      const aboveW = lo ? cum[lo - 1] : 0, tiedW = (lo2 ? cum[lo2 - 1] : 0) - aboveW;
+      for (let ci = 0; ci < CS.length; ci++) {
+        const C = CS[ci], r = R.c[ci];
+        const above = aboveW * C.E, tied = tiedW * C.E;
+        const rank = Math.floor(above) + 1, rankEnd = Math.max(rank, Math.round(above + tied) + 1);
+        const p = payRange(C, rank, rankEnd);
+        r.rankSum += rank; r.payout += p;
+        if (rank <= C.paidMax) r.cash++;
+        if (above < 0.5) r.win += 1 / Math.max(1, rankEnd - rank + 1);
+        if (p > 0) { if (rank === 1) r.bk.win += p; else if (rank <= C.top1) r.bk.top1 += p; else if (rank <= C.top10) r.bk.top10 += p; else r.bk.cash += p; }
+        if (rank <= C.top1) { r.top1++; r.topN++; const c = mCols[m]; for (let k = 0; k < c.length; k++) r.topSum[k] += sim.data[o + c[k]] * (sd && k === 0 ? 1.5 : 1); }
+      }
+    }
+    if (onProgress && performance.now() - last > 40) { onProgress(it / N); await tick(); last = performance.now(); }
+  }
+  return res.map((R, m) => {
+    const s = Array.from(R.scores).sort((a, b) => a - b); const q = x => s[Math.min(N - 1, Math.floor(x * N))];
+    const dupW = fieldSig.get(sigOf(mine[m])) || 0;
+    return { mean: s.reduce((a, b) => a + b, 0) / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), p99: q(0.99),
+      c: R.c.map((r, ci) => { const avgPay = r.payout / N, fee = CS[ci].fee; return { avgPay, roi: fee ? (avgPay - fee) / fee * 100 : 0,
+        cash: r.cash / N * 100, top1: r.top1 / N * 100, win: r.win / N * 100, avgRank: r.rankSum / N,
+        bk: { win: r.bk.win / N, top1: r.bk.top1 / N, top10: r.bk.top10 / N, cash: r.bk.cash / N },
+        dups: dupW * CS[ci].E, topN: r.topN, topAvg: r.topN ? Array.from(r.topSum, x => x / r.topN) : null }; }) };
+  });
+}
+
 // ===== helpers =====
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1155,7 +1225,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), optFor: $('#optFor').value, skipOut: $('#skipOut').checked,
-    simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctCustom: $('#ctCustom').checked, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
+    simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
 // ===== notices =====
@@ -1464,38 +1534,36 @@ function boomLine(p, cpt) { const x = S.site === 'fd' ? 5.5 : 6; return (cpt ? p
 let simming = false;
 function simProgress(stage, f) { $('#simProg').style.width = Math.round(stage.from + (stage.to - stage.from) * f) + '%'; }
 
-async function runSim() {
+async function runSim(mode) {
   if (simming || building) return;
+  const buildBest = mode === 'best';
   const site = SITES[S.site]; const st = settings();
   const pool = S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0);
   if (pool.length < site.size) return notify('err', 'Not enough players with projections to simulate.');
   const iters = +st.simIters || 1000;
   const contests = selectedContests(st);
   if (!contests.length) return notify('err', 'Pick at least one contest to simulate.');
-  simming = true; $('#simBtn').disabled = true; $('#simBtn').textContent = 'Simulating…';
+  simming = true; $('#simBtn').disabled = true; $('#bestBtn').disabled = true; (buildBest ? $('#bestBtn') : $('#simBtn')).textContent = 'Simulating…';
+  const stg = buildBest ? { sim: [0, 8], opt: [8, 25], field: [25, 38], mine: [38, 45] } : { sim: [0, 15], opt: [15, 55], field: [55, 75], mine: [75, 100] };
+  const prog = k => f => simProgress({ from: stg[k][0], to: stg[k][1] }, f);
   const t0 = performance.now(); const msg = t => $('#simMsg').textContent = t;
   try {
     msg('Replaying the slate…');
-    const sim = await simulateScores(pool, { iters, seed: (Date.now() % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, onProgress: f => simProgress({ from: 0, to: 15 }, f) });
+    const sim = await simulateScores(pool, { iters, seed: (Date.now() % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, onProgress: prog('sim') });
     let opt = null;
     if (st.doOpt) {
       msg('Finding the optimal lineup in each replay…');
       const rows = [];
       for (const p of pool) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: p.proj, own: p.own || 0, src: p }; if (site.showdown) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); }
-      opt = await simOptimals(S.site, rows, sim, { maxIters: Math.min(iters, 1000), maxTeam: st.maxTeam || 0, onProgress: f => simProgress({ from: 15, to: 55 }, f) });
+      opt = await simOptimals(S.site, rows, sim, { maxIters: Math.min(iters, 1000), maxTeam: st.maxTeam || 0, onProgress: prog('opt') });
     }
     msg('Building the contest field…');
-    const field = await buildField(S.site, pool, { sharpShare: (st.sharp ?? 35) / 100, sharpRand: 18, onProgress: f => simProgress({ from: 55, to: 75 }, f) });
+    const field = await buildField(S.site, pool, { sharpShare: (st.sharp ?? 35) / 100, sharpRand: 18, onProgress: prog('field') });
     const mineL = S.builtSite === S.site ? S.lineups : [];
     let mine = [];
     if (mineL.length) {
-      const keys = mineL.map(l => l.map(p => p.key)); const per = [];
-      for (let ci = 0; ci < contests.length; ci++) {
-        const c = contests[ci];
-        msg(`Running ${mineL.length} lineup${mineL.length === 1 ? '' : 's'} through the ${c.name}…`);
-        per.push(await contestSim(S.site, sim, keys, field, { entries: c.entries, fee: c.fee, payouts: c.payouts, onProgress: f => simProgress({ from: 75 + 25 * ci / contests.length, to: 75 + 25 * (ci + 1) / contests.length }, f) }));
-      }
-      mine = mineL.map((_, i) => { const b = per[0][i]; return { mean: b.mean, p10: b.p10, p50: b.p50, p90: b.p90, p99: b.p99, c: per.map(r => r[i]) }; });
+      msg(`Running ${mineL.length} lineup${mineL.length === 1 ? '' : 's'} through ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
+      mine = await contestSimMulti(S.site, sim, mineL.map(l => l.map(p => p.key)), field, contests, prog('mine'));
       S.whyOpen = null;
     }
     // what the average opponent looks like, for the drivers breakdown
@@ -1513,14 +1581,68 @@ async function runSim() {
       return { p, mean: arr.reduce((a, b) => a + b, 0) / sim.iters, p10: q(0.1), p90: q(0.9), p99: q(0.99), boom: boom / sim.iters * 100,
         opt: optPct, cpt: cptPct, own: p.own || 0, field: field.realized[p.key] || 0, lev: optPct == null ? null : optPct - (p.own || 0) };
     });
-    S.sim = { sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c),
+    let built = null;
+    if (buildBest) built = await buildBestLineups({ site, st, pool, sim, opt, field, contests, iters, msg });
+    S.sim = { sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
-    if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
+    if (buildBest) S.simTab = 'built'; else if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
+    S.whyOpen = null;
     msg(`Done in ${S.sim.seconds.toFixed(1)}s.`);
   } catch (e) { notify('err', 'The simulation hit an error: ' + esc(e.message)); msg('Simulation stopped.'); }
-  simming = false; $('#simBtn').disabled = false; $('#simBtn').textContent = 'Run simulation'; $('#simProg').style.width = '100%';
+  simming = false; $('#simBtn').disabled = false; $('#bestBtn').disabled = false; $('#simBtn').textContent = 'Run simulation'; $('#bestBtn').textContent = 'Build best simmed lineups'; $('#simProg').style.width = '100%';
   renderSim();
   if (S.sim && matchMedia('(max-width: 980px)').matches) document.querySelector('section[aria-label="Simulation results"]').scrollIntoView({ block: 'start' });
+}
+
+// ----- sim-built lineups: candidates -> contest screen -> pick -> fresh re-score -----
+async function buildBestLineups({ site, st, pool, sim, opt, field, contests, iters, msg }) {
+  const sd = !!site.showdown;
+  const sigOf = l => sd ? l[0].key + '|' + l.slice(1).map(p => p.key).sort().join(',') : l.map(p => p.key).sort().join(',');
+  const C = Math.max(30, +st.candN || 300), N = Math.max(1, Math.min(150, Math.round(st.bestN || 20)));
+  const locks = S.players.filter(p => p.lock && pool.includes(p)).map(p => p.key);
+  const mkRows = f => { const rows = []; for (const p of pool) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: f(p), own: p.own || 0, src: p }; if (sd) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); } return rows; };
+  const recipes = [
+    { n: Math.round(C * 0.4), rows: mkRows(p => p.proj), rand: 15 },
+    { n: Math.round(C * 0.25), rows: mkRows(p => p.ceil || p.proj * 1.2), rand: 10 },
+    { n: Math.round(C * 0.25), rows: mkRows(p => p.proj * (1 - 0.25 * Math.min(1, (p.own || 0) / 60))), rand: 12 },
+  ];
+  const cand = new Map(); let done = 0, last = performance.now();
+  msg(`Building ${C} candidate lineups…`);
+  for (const rc of recipes) {
+    for (const r of generate(S.site, rc.rows, { lineups: rc.n, uniq: 2, rand: rc.rand, locks, excl: [], minExp: {}, maxExp: {}, maxTeam: st.maxTeam || 0, minSal: st.minSal || 0, nodeLimit: 3e5 })) {
+      if (r.error) break; const l = r.lineup.map(x => x.src); const g = sigOf(l); if (!cand.has(g)) cand.set(g, l);
+      done++; if (performance.now() - last > 40) { simProgress({ from: 45, to: 62 }, done / C); await tick(); last = performance.now(); }
+    }
+  }
+  if (opt) for (const x of opt.lineups.slice(0, Math.round(C * 0.1))) {
+    const l = x.rows.map(r => r.src); if (locks.every(k => l.some(p => p.key === k))) { const g = sigOf(l); if (!cand.has(g)) cand.set(g, l); }
+  }
+  const poolL = [...cand.values()];
+  if (!poolL.length) throw new Error('No candidate lineups fit your Optimizer settings.');
+  msg(`Running ${poolL.length} candidates through ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
+  const scr = await contestSimMulti(S.site, sim, poolL.map(l => l.map(p => p.key)), field, contests, f => simProgress({ from: 62, to: 85 }, f));
+  const metric = st.rankBy || 'avgroi';
+  const score = r => r.c.reduce((a, x) => a + (metric === 'top1' ? x.top1 : metric === 'cash' ? x.cash : x.roi), 0) / r.c.length;
+  const ranked = scr.map((r, i) => ({ r, i, sc: score(r) })).sort((a, b) => b.sc - a.sc);
+  // greedy pick that respects min unique and max exposure from the Optimizer
+  const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
+  const cap = p => { const mx = p.maxExp ?? st.globalMax; return mx != null && mx < 100 ? Math.max(1, Math.floor(mx / 100 * N + 1e-9)) : N; };
+  const used = {}; const picked = []; let skipped = 0;
+  for (const x of ranked) {
+    if (picked.length >= N) break;
+    const l = poolL[x.i]; const ks = new Set(l.map(p => p.key));
+    if (l.some(p => (used[p.key] || 0) >= cap(p))) { skipped++; continue; }
+    if (picked.some(y => site.size - poolL[y.i].filter(p => ks.has(p.key)).length < uniq)) { skipped++; continue; }
+    picked.push(x); l.forEach(p => used[p.key] = (used[p.key] || 0) + 1);
+  }
+  msg(`Re-scoring the top ${picked.length} on fresh replays…`);
+  const simB = await simulateScores(pool, { iters, seed: ((Date.now() * 7) % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, onProgress: f => simProgress({ from: 85, to: 90 }, f) });
+  const lineups = picked.map(x => poolL[x.i]);
+  const val = await contestSimMulti(S.site, simB, lineups.map(l => l.map(p => p.key)), field, contests, f => simProgress({ from: 90, to: 100 }, f));
+  const avgOf = (arr, f) => arr.reduce((a, r) => a + f(r), 0) / arr.length;
+  const roiAvg = r => r.c.reduce((a, x) => a + x.roi, 0) / r.c.length;
+  return { mine: val, lineups, candidates: poolL.length, metric, wanted: N, skipped,
+    screenRoi: avgOf(picked, x => roiAvg(x.r)), freshRoi: avgOf(val, roiAvg), poolRoi: avgOf(scr, roiAvg) };
 }
 
 // ----- ROI drivers -----
@@ -1624,12 +1746,18 @@ function renderSim() {
   note.innerHTML = `<div class="simnote">${notes.join('<br>')}</div>`;
   stats.hidden = true; foot.hidden = true;
 
-  if (S.simTab === 'mine') {
-    if (!R.mine.length) {
-      body.innerHTML = `<div class="empty">No lineups were simulated. Build lineups on the Optimizer tab, or add sim optimals, then run the simulation again.</div>`; return;
+  if (S.simTab === 'mine' || S.simTab === 'built') {
+    const BUILT = S.simTab === 'built'; const B = R.built;
+    if (BUILT && !B) {
+      body.innerHTML = `<div class="empty">Use <b>Build best simmed lineups</b> in the settings to have Swish search for the lineups with the best results in your contests.</div>`; return;
     }
-    if (R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    const rows = R.mine.map((r, i) => ({ ...r, i, l: R.mineLineups[i], proj: R.mineLineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
+    if (!BUILT && !R.mine.length) {
+      body.innerHTML = `<div class="empty">No lineups were simulated. Build lineups on the Optimizer tab, add sim optimals, or use <b>Build best simmed lineups</b>, then run the simulation again.</div>`; return;
+    }
+    const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
+    if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidate lineups by <b>${B.metric === 'top1' ? 'top 1% rate' : B.metric === 'cash' ? 'cash rate' : 'average ROI'}</b>${B.skipped ? `, skipping ${B.skipped} that broke your min-unique or exposure settings` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. On the replays used to pick them they averaged ${sgnPct(B.screenRoi)} ROI; on fresh replays they average <b>${sgnPct(B.freshRoi)}</b>, which is the number shown below. The whole candidate pool averaged ${sgnPct(B.poolRoi)}.</div>`;
+    const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
     const sgn = x => (x >= 0 ? '+' : '') + Math.round(x) + '%';
@@ -1650,6 +1778,22 @@ function renderSim() {
         <td><span class="dist" title="10th ${f1(r.p10)} · median ${f1(r.p50)} · 90th ${f1(r.p90)} · 99th ${f1(r.p99)}"><i style="left:${X(r.p10)}%;width:${(X(r.p99) - X(r.p10)).toFixed(1)}%"></i><b style="left:${X(r.p10)}%;width:${(X(r.p90) - X(r.p10)).toFixed(1)}%"></b><u style="left:${X(r.p50)}%"></u></span></td>
         <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.win)}</td><td class="n">${roiCell(x.roi)}</td>`).join('') + `</tr>` + (S.whyOpen === r.i ? `<tr class="why-row"><td colspan="${ncol}">${whyHTML(R, r)}</td></tr>` : '')).join('') + '</tbody></table>';
     foot.hidden = false;
+    if (BUILT) {
+      foot.innerHTML = `<span class="meta">Use these as your lineups for export on the Optimizer tab.</span><button class="btn" id="addBuilt">Add to my lineups</button><button class="btn primary" id="useBuilt">Replace my lineups</button>`;
+      $('#useBuilt').onclick = () => {
+        S.lineups = B.lineups.slice(); S.builtSite = S.site; R.mine = B.mine.slice(); R.mineLineups = B.lineups.slice(); R.mineStale = false;
+        notify('ok', `Your lineups are now the <b>${B.lineups.length}</b> sim-built lineups. They're on the Optimizer tab and in your export.`);
+        renderPool(); renderResults(); renderSim();
+      };
+      $('#addBuilt').onclick = () => {
+        const have = new Set((S.builtSite === S.site ? S.lineups : []).map(l => l.map(p => p.key).sort().join(',')));
+        if (S.builtSite !== S.site) S.lineups = [];
+        const add = B.lineups.filter(l => { const g = l.map(p => p.key).sort().join(','); if (have.has(g)) return false; have.add(g); return true; });
+        S.lineups = S.lineups.concat(add); S.builtSite = S.site; R.mineStale = true;
+        notify('ok', `Added <b>${add.length}</b> sim-built lineup${add.length === 1 ? '' : 's'}. You now have ${S.lineups.length} on the Optimizer tab.`);
+        renderPool(); renderResults(); renderSim();
+      };
+    } else {
     foot.innerHTML = `<span class="meta">Keep your strongest lineups and drop the rest. This changes the set you export on the Optimizer tab.</span>
       <span class="keep">Keep top <input type="number" id="keepN" min="1" max="${rows.length}" value="${Math.max(1, Math.round(rows.length / 2))}" aria-label="Number of lineups to keep"> by</span>
       <select id="keepBy" class="sel" style="width:auto">${CT.length > 1 ? '<option value="avgroi">Avg ROI (all contests)</option>' : ''}${CT.map((c, ci) => `<option value="c${ci}.roi">${esc(c.short)} ROI</option><option value="c${ci}.top1">${esc(c.short)} top 1%</option><option value="c${ci}.cash">${esc(c.short)} cash rate</option>`).join('')}<option value="mean">Sim avg</option></select>
@@ -1663,6 +1807,7 @@ function renderSim() {
       notify('ok', `Kept your top <b>${n}</b> lineups by ${$('#keepBy').selectedOptions[0].text}. They're now the set on the Optimizer tab and in your export.`);
       renderPool(); renderResults(); renderSim();
     };
+    }
   } else if (S.simTab === 'players') {
     const rows = R.players.slice();
     sortRows(rows, S.simPSort, (r, k) => k === 'name' ? r.p.name : k === 'salary' ? r.p.salary : k === 'proj' ? r.p.proj : r[k]);
@@ -1693,7 +1838,7 @@ function renderSim() {
 }
 
 document.querySelector('.views').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (!b) return; S.mainView = b.dataset.view; renderSim(); });
-$('#simTabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (!b) return; S.simTab = b.dataset.tab; renderSim(); });
+$('#simTabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (!b) return; S.simTab = b.dataset.tab; S.whyOpen = null; renderSim(); });
 $('#simBody').addEventListener('click', e => {
   const wb = e.target.closest('[data-why]');
   if (wb) { const i = +wb.dataset.why; S.whyOpen = S.whyOpen === i ? null : i; renderSim(); return; }
@@ -1702,7 +1847,8 @@ $('#simBody').addEventListener('click', e => {
   if (sort.key === k) sort.dir = -sort.dir; else { sort.key = k; sort.dir = k === 'name' || k === 'i' ? 1 : -1; }
   renderSim();
 });
-$('#simBtn').addEventListener('click', runSim);
+$('#simBtn').addEventListener('click', () => runSim());
+$('#bestBtn').addEventListener('click', () => runSim('best'));
 const syncCustom = () => { $('#customBox').hidden = !$('#ctCustom').checked; };
 $('#ctCustom').addEventListener('change', syncCustom);
 $('#goSim').addEventListener('click', () => { S.mainView = 'sim'; S.simTab = 'mine'; renderSim(); scrollTo({ top: 0 }); runSim(); });
