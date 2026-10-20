@@ -189,6 +189,17 @@ details.adv .form { padding: 0; }
 .neg-val { color: var(--excl); }
 .lnames { white-space: normal; min-width: 220px; max-width: 360px; font-size: 12.5px; line-height: 1.35; }
 .lnames .c { color: var(--accent); font-weight: 600; }
+.flabel { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.contests { display: grid; gap: 6px; }
+.ct { display: flex; gap: 9px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); cursor: pointer; }
+.ct:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.ct input { accent-color: var(--accent); margin-top: 3px; }
+.ct span { display: grid; gap: 1px; min-width: 0; }
+.ct b { font-weight: 600; font-size: 13.5px; }
+.ct small { font-size: 11.5px; color: var(--muted); }
+.customct { display: grid; gap: 14px; }
+th.cg { border-left: 1px solid var(--line); }
+td.cg { border-left: 1px solid var(--line); }
 .simnote { padding: 10px 14px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .simnote b { color: var(--ink); font-weight: 600; }
 .keep { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
@@ -330,13 +341,22 @@ details.adv .form { padding: 0; }
       <div class="form">
         <div class="field"><label for="simIters">Iterations</label>
           <select id="simIters" class="sel"><option value="500">500 (fast)</option><option value="1000" selected>1,000</option><option value="2500">2,500</option><option value="5000">5,000 (slow)</option></select></div>
-        <div class="two">
-          <div class="field"><label for="entries">Contest entries</label><input type="number" id="entries" min="2" step="1" value="10000"></div>
-          <div class="field"><label for="fee">Entry fee $</label><input type="number" id="fee" min="0" step="0.25" value="5"></div>
+        <div class="field"><span class="flabel">Contests</span>
+          <div class="contests">
+            <label class="ct"><input type="checkbox" id="ctP0" checked><span><b>$12 Single Entry</b><small>980 entries · $10,000 prizes · top 229 paid · 1st $1,000</small></span></label>
+            <label class="ct"><input type="checkbox" id="ctP1" checked><span><b>$5 Single Entry</b><small>1,189 entries · $5,000 prizes · top 262 paid · 1st $500</small></span></label>
+            <label class="ct"><input type="checkbox" id="ctCustom"><span><b>Custom contest</b><small>Your own entries, fee and payouts</small></span></label>
+          </div>
         </div>
-        <div class="field"><label for="payText">Prize payouts</label>
-          <textarea id="payText" class="pay" placeholder="Optional. Paste the contest's Prize Payouts, e.g.&#10;1st $2,000&#10;2nd $1,000&#10;3rd - 5th $300"></textarea>
-          <span class="hint">Left blank, Swish uses a typical tournament payout: 15% rake, top 22% paid.</span></div>
+        <div class="customct" id="customBox" hidden>
+          <div class="two">
+            <div class="field"><label for="entries">Entries</label><input type="number" id="entries" min="2" step="1" value="10000"></div>
+            <div class="field"><label for="fee">Entry fee $</label><input type="number" id="fee" min="0" step="0.25" value="5"></div>
+          </div>
+          <div class="field"><label for="payText">Prize payouts</label>
+            <textarea id="payText" class="pay" placeholder="Optional. Paste the contest's Prize Payouts, e.g.&#10;1st $2,000&#10;2nd $1,000&#10;3rd - 5th $300"></textarea>
+            <span class="hint">Left blank, Swish uses a typical tournament payout: 15% rake, top 22% paid.</span></div>
+        </div>
         <div class="field"><label for="sharp">Optimizer users in field <output id="sharpOut">35%</output></label><input type="range" id="sharp" min="0" max="70" step="5" value="35">
           <span class="hint">The rest of the field picks players in line with projected ownership.</span></div>
         <label class="check"><input type="checkbox" id="doOpt" checked> Find sim-optimal lineups</label>
@@ -817,7 +837,7 @@ function tableFrom(rows, test) {
 
 // ===== state =====
 const S = {
-  mainView: 'opt', simTab: 'mine', simSort: { key: 'roi', dir: -1 }, simPSort: { key: 'opt', dir: -1 }, sim: null,
+  mainView: 'opt', simTab: 'mine', simSort: { key: 'c0.roi', dir: -1 }, simPSort: { key: 'opt', dir: -1 }, sim: null,
   site: 'dk', players: [], source: 'sample', fileName: '', gamesOff: new Set(), pos: 'ALL', view: 'all', q: '',
   sort: { key: 'salary', dir: -1 }, lineups: [], builtSite: null, tab: 'lineups',
 };
@@ -1080,7 +1100,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), optFor: $('#optFor').value, skipOut: $('#skipOut').checked,
-    simIters: $('#simIters').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
+    simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctCustom: $('#ctCustom').checked, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
 // ===== notices =====
@@ -1320,6 +1340,53 @@ addEventListener('drop', e => {
 });
 
 // ===== simulation UI =====
+const CONTESTS = [
+  { name: '$12 Single Entry', short: '$12 SE', entries: 980, fee: 12, payouts: `1st $1,000.00
+2nd $500.00
+3rd $350.00
+4th $250.00
+5th $200.00
+6th - 7th $150.00
+8th - 10th $125.00
+11th - 14th $100.00
+15th - 20th $75.00
+21st - 27th $60.00
+28th - 36th $50.00
+37th - 47th $45.00
+48th - 62nd $40.00
+63rd - 84th $35.00
+85th - 115th $30.00
+116th - 161st $25.00
+162nd - 229th $20.00` },
+  { name: '$5 Single Entry', short: '$5 SE', entries: 1189, fee: 5, payouts: `1st $500.00
+2nd $300.00
+3rd $200.00
+4th $150.00
+5th $100.00
+6th $75.00
+7th - 8th $60.00
+9th - 10th $50.00
+11th - 12th $45.00
+13th - 15th $40.00
+16th - 20th $35.00
+21st - 25th $30.00
+26th - 35th $25.00
+36th - 55th $20.00
+56th - 95th $15.00
+96th - 262nd $10.00` },
+];
+function selectedContests(st) {
+  const out = [];
+  CONTESTS.forEach((c, i) => { if ($('#ctP' + i).checked) out.push({ name: c.name, short: c.short, entries: c.entries, fee: c.fee, payouts: parsePayouts(c.payouts), source: 'preset' }); });
+  if ($('#ctCustom').checked) {
+    const entries = Math.max(2, Math.round(st.entries || 10000)), fee = Math.max(0, st.fee ?? 5);
+    let payouts = parsePayouts(st.payText); const pasted = payouts.length > 0;
+    if (!pasted) payouts = autoPayouts(entries, fee);
+    out.push({ name: `Custom ${money(fee)} contest`, short: 'Custom', entries, fee, payouts, source: pasted ? 'pasted' : 'auto' });
+  }
+  out.forEach(c => { c.paid = c.payouts.reduce((a, r) => a + (r.end - r.start + 1), 0); c.pool = c.payouts.reduce((a, r) => a + r.pay * (r.end - r.start + 1), 0); });
+  return out;
+}
 const slateSig = () => S.site + '|' + S.players.map(p => p.key + ':' + p.proj + ':' + (p.ceil || '') + ':' + p.own + ':' + (p.excl ? 1 : 0)).join(',') + '|' + [...S.gamesOff].join(',');
 const lastName = n => { const parts = String(n).split(' '); const suf = /^(jr\.?|sr\.?|ii|iii|iv)$/i; return parts.length > 1 && suf.test(parts[parts.length - 1]) ? parts[parts.length - 2] : parts[parts.length - 1]; };
 const pctFmt = x => x >= 10 ? Math.round(x) + '%' : x >= 1 ? x.toFixed(1) + '%' : x > 0 ? x.toFixed(2) + '%' : '0%';
@@ -1334,10 +1401,8 @@ async function runSim() {
   const pool = S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0);
   if (pool.length < site.size) return notify('err', 'Not enough players with projections to simulate.');
   const iters = +st.simIters || 1000;
-  const entries = Math.max(2, Math.round(st.entries || 10000)), fee = Math.max(0, st.fee ?? 5);
-  let payouts = parsePayouts(st.payText);
-  const pasted = payouts.length > 0;
-  if (!pasted) payouts = autoPayouts(entries, fee);
+  const contests = selectedContests(st);
+  if (!contests.length) return notify('err', 'Pick at least one contest to simulate.');
   simming = true; $('#simBtn').disabled = true; $('#simBtn').textContent = 'Simulating…';
   const t0 = performance.now(); const msg = t => $('#simMsg').textContent = t;
   try {
@@ -1355,8 +1420,13 @@ async function runSim() {
     const mineL = S.builtSite === S.site ? S.lineups : [];
     let mine = [];
     if (mineL.length) {
-      msg(`Running ${mineL.length} lineup${mineL.length === 1 ? '' : 's'} through the contest…`);
-      mine = await contestSim(S.site, sim, mineL.map(l => l.map(p => p.key)), field, { entries, fee, payouts, onProgress: f => simProgress({ from: 75, to: 100 }, f) });
+      const keys = mineL.map(l => l.map(p => p.key)); const per = [];
+      for (let ci = 0; ci < contests.length; ci++) {
+        const c = contests[ci];
+        msg(`Running ${mineL.length} lineup${mineL.length === 1 ? '' : 's'} through the ${c.name}…`);
+        per.push(await contestSim(S.site, sim, keys, field, { entries: c.entries, fee: c.fee, payouts: c.payouts, onProgress: f => simProgress({ from: 75 + 25 * ci / contests.length, to: 75 + 25 * (ci + 1) / contests.length }, f) }));
+      }
+      mine = mineL.map((_, i) => { const b = per[0][i]; return { mean: b.mean, p10: b.p10, p50: b.p50, p90: b.p90, p99: b.p99, c: per.map(r => r[i]) }; });
     }
     // player-level distributions
     const players = pool.map(p => {
@@ -1368,7 +1438,7 @@ async function runSim() {
       return { p, mean: arr.reduce((a, b) => a + b, 0) / sim.iters, p10: q(0.1), p90: q(0.9), p99: q(0.99), boom: boom / sim.iters * 100,
         opt: optPct, cpt: cptPct, own: p.own || 0, field: field.realized[p.key] || 0, lev: optPct == null ? null : optPct - (p.own || 0) };
     });
-    S.sim = { sig: slateSig(), site: S.site, iters, entries, fee, pasted, paid: payouts.reduce((a, r) => a + (r.end - r.start + 1), 0), pool: payouts.reduce((a, r) => a + r.pay * (r.end - r.start + 1), 0),
+    S.sim = { sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c),
       players, opt, mine, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
     if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
     msg(`Done in ${S.sim.seconds.toFixed(1)}s.`);
@@ -1395,10 +1465,10 @@ function renderSim() {
     body.innerHTML = '<div class="empty">Run the simulation to replay this slate thousands of times. You\'ll see how each of your lineups scores, how often it cashes or finishes top 1% against a realistic field, and which players show up most in the optimal lineup.</div>';
     return;
   }
-  $('#simMeta').textContent = `${R.iters.toLocaleString()} replays · ${R.entries.toLocaleString()}-entry contest · ${money(R.fee)} entry`;
+  $('#simMeta').textContent = `${R.iters.toLocaleString()} replays · ${R.contests.map(c => c.short).join(' + ')}`;
   const notes = [];
   if (R.sig !== slateSig()) notes.push('<b>Your player pool changed since this run.</b> Run the simulation again to use the new numbers.');
-  notes.push(`Results assume your projections are right, so treat ROI as a way to compare lineups rather than a forecast. Field: ${R.sharp}% optimizer users, the rest picking by projected ownership. Payouts: ${R.pasted ? 'your pasted table' : 'typical tournament structure'} (${R.paid.toLocaleString()} paid, ${money(R.pool)} prize pool).`);
+  notes.push(`Results assume your projections are right, so treat ROI as a way to compare lineups rather than a forecast. Field: ${R.sharp}% optimizer users, the rest picking by projected ownership. Contests: ${R.contests.map(c => `<b>${esc(c.name)}</b> (${c.entries.toLocaleString()} entries, ${money(c.fee)}, ${money(c.pool)} prizes, top ${c.paid.toLocaleString()} paid${c.source === 'auto' ? ', typical payout curve' : ''})`).join('; ')}.`);
   note.innerHTML = `<div class="simnote">${notes.join('<br>')}</div>`;
   stats.hidden = true; foot.hidden = true;
 
@@ -1408,25 +1478,31 @@ function renderSim() {
     }
     if (R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
     const rows = R.mine.map((r, i) => ({ ...r, i, l: R.mineLineups[i], proj: R.mineLineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
-    const avg = k => rows.reduce((a, r) => a + r[k], 0) / rows.length;
+    const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
+    const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
+    const sgn = x => (x >= 0 ? '+' : '') + Math.round(x) + '%';
     stats.hidden = false;
-    stats.innerHTML = [['Avg ROI', (avg('roi') >= 0 ? '+' : '') + Math.round(avg('roi')) + '%'], ['Avg cash rate', pctFmt(avg('cash'))], ['Avg top 1%', pctFmt(avg('top1'))], ['Best ROI', '+' + Math.round(Math.max(...rows.map(r => r.roi))) + '%'], ['Avg sim score', f1(avg('mean'))]]
+    stats.innerHTML = CT.map((c, ci) => [[`${c.short} avg ROI`, sgn(avg(`c${ci}.roi`))], [`${c.short} best ROI`, sgn(Math.max(...rows.map(r => r.c[ci].roi)))], [`${c.short} avg cash`, pctFmt(avg(`c${ci}.cash`))]]).flat().concat([['Avg sim score', f1(avg('mean'))]])
       .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
-    sortRows(rows, S.simSort, (r, k) => k === 'i' ? -r.i : r[k]);
+    if (!/^c\d+\.\w+$/.test(S.simSort.key) && !['i', 'proj', 'mean', 'p99'].includes(S.simSort.key) || /^c(\d+)/.test(S.simSort.key) && +/^c(\d+)/.exec(S.simSort.key)[1] >= CT.length) S.simSort = { key: 'c0.roi', dir: -1 };
+    sortRows(rows, S.simSort, val);
     const lo = Math.min(...rows.map(r => r.p10)), hi = Math.max(...rows.map(r => r.p99)); const X = v => ((v - lo) / (hi - lo || 1) * 100).toFixed(1);
-    body.innerHTML = `<table class="simt"><thead><tr>${th('i', '#', S.simSort, false)}<th>Lineup</th>${th('proj', 'Proj', S.simSort)}${th('mean', 'Sim avg', S.simSort)}<th>Range (10th–99th)</th>${th('p99', '99th', S.simSort)}${th('cash', 'Cash', S.simSort)}${th('top1', 'Top 1%', S.simSort)}${th('win', 'Win', S.simSort)}${th('roi', 'ROI', S.simSort)}</tr></thead><tbody>` +
+    const cth = (k, t, first) => th(k, t, S.simSort).replace('<th class="sortable n"', `<th class="sortable n${first ? ' cg' : ''}"`);
+    body.innerHTML = `<table class="simt"><thead><tr>${th('i', '#', S.simSort, false)}<th>Lineup</th>${th('proj', 'Proj', S.simSort)}${th('mean', 'Sim avg', S.simSort)}<th>Range (10th–99th)</th>${th('p99', '99th', S.simSort)}` +
+      CT.map((c, ci) => cth(`c${ci}.cash`, `${esc(c.short)}<br>Cash`, true) + cth(`c${ci}.top1`, `${esc(c.short)}<br>Top 1%`) + cth(`c${ci}.win`, `${esc(c.short)}<br>Win`) + cth(`c${ci}.roi`, `${esc(c.short)}<br>ROI`)).join('') + `</tr></thead><tbody>` +
       rows.map(r => `<tr><td class="rank">${String(r.i + 1).padStart(3, '0')}</td><td class="lnames">${r.l.map((p, j) => site.showdown && j === 0 ? `<span class="c">${esc(lastName(p.name))} (C)</span>` : esc(lastName(p.name))).join(' · ')}</td>
         <td class="n">${f1(r.proj)}</td><td class="n">${f1(r.mean)}</td>
         <td><span class="dist" title="10th ${f1(r.p10)} · median ${f1(r.p50)} · 90th ${f1(r.p90)} · 99th ${f1(r.p99)}"><i style="left:${X(r.p10)}%;width:${(X(r.p99) - X(r.p10)).toFixed(1)}%"></i><b style="left:${X(r.p10)}%;width:${(X(r.p90) - X(r.p10)).toFixed(1)}%"></b><u style="left:${X(r.p50)}%"></u></span></td>
-        <td class="n">${f1(r.p99)}</td><td class="n">${pctFmt(r.cash)}</td><td class="n">${pctFmt(r.top1)}</td><td class="n">${pctFmt(r.win)}</td><td class="n">${roiCell(r.roi)}</td></tr>`).join('') + '</tbody></table>';
+        <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.win)}</td><td class="n">${roiCell(x.roi)}</td>`).join('') + `</tr>`).join('') + '</tbody></table>';
     foot.hidden = false;
     foot.innerHTML = `<span class="meta">Keep your strongest lineups and drop the rest. This changes the set you export on the Optimizer tab.</span>
       <span class="keep">Keep top <input type="number" id="keepN" min="1" max="${rows.length}" value="${Math.max(1, Math.round(rows.length / 2))}" aria-label="Number of lineups to keep"> by</span>
-      <select id="keepBy" class="sel" style="width:auto"><option value="roi">ROI</option><option value="top1">Top 1%</option><option value="cash">Cash rate</option><option value="mean">Sim avg</option></select>
+      <select id="keepBy" class="sel" style="width:auto">${CT.length > 1 ? '<option value="avgroi">Avg ROI (all contests)</option>' : ''}${CT.map((c, ci) => `<option value="c${ci}.roi">${esc(c.short)} ROI</option><option value="c${ci}.top1">${esc(c.short)} top 1%</option><option value="c${ci}.cash">${esc(c.short)} cash rate</option>`).join('')}<option value="mean">Sim avg</option></select>
       <button class="btn primary" id="keepBtn"${R.mineStale ? ' disabled title="Run the simulation again first"' : ''}>Keep lineups</button>`;
     $('#keepBtn').onclick = () => {
       const n = Math.max(1, Math.min(rows.length, +$('#keepN').value || 1)); const by = $('#keepBy').value;
-      const ranked = R.mine.map((r, i) => ({ r, i })).sort((a, b) => b.r[by] - a.r[by]).slice(0, n);
+      const score = r => by === 'avgroi' ? r.c.reduce((a, x) => a + x.roi, 0) / r.c.length : val(r, by);
+      const ranked = R.mine.map((r, i) => ({ r, i })).sort((a, b) => score(b.r) - score(a.r)).slice(0, n);
       R.mine = ranked.map(x => x.r); R.mineLineups = ranked.map(x => R.mineLineups[x.i]);
       S.lineups = R.mineLineups.slice(); S.builtSite = S.site; R.mineStale = false;
       notify('ok', `Kept your top <b>${n}</b> lineups by ${$('#keepBy').selectedOptions[0].text}. They're now the set on the Optimizer tab and in your export.`);
@@ -1470,12 +1546,15 @@ $('#simBody').addEventListener('click', e => {
   renderSim();
 });
 $('#simBtn').addEventListener('click', runSim);
+const syncCustom = () => { $('#customBox').hidden = !$('#ctCustom').checked; };
+$('#ctCustom').addEventListener('change', syncCustom);
 $('#goSim').addEventListener('click', () => { S.mainView = 'sim'; S.simTab = 'mine'; renderSim(); scrollTo({ top: 0 }); runSim(); });
 [['sharp', 'sharpOut'], ['gameCorr', 'gameOut'], ['teamCorr', 'teamOut']].forEach(([i, o]) => { const f = () => $('#' + o).textContent = $('#' + i).value + '%'; $('#' + i).addEventListener('input', f); f(); });
 
 restore();
 $('#randOut').textContent = $('#rand').value + '%';
 [['sharp', 'sharpOut'], ['gameCorr', 'gameOut'], ['teamCorr', 'teamOut']].forEach(([i, o]) => $('#' + o).textContent = $('#' + i).value + '%');
+syncCustom();
 render();
 </script>
 <script>

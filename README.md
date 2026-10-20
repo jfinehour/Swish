@@ -13,7 +13,7 @@ It opens full screen, works offline, and saves your slate and settings on each d
 
 ## Using it
 - **Optimizer:** import a DraftKings or FanDuel salary CSV and/or a projections CSV (Name, FPTS, Ceiling, ProjOwn, DKSlateID). Lock, exclude and set exposure per player, then build and export an upload-ready CSV.
-- **Simulate:** replays the slate with correlated player outcomes, finds how often each player is in the optimal lineup, and runs your lineups through a contest against a field built from projected ownership to estimate cash rate, top-1% rate and ROI.
+- **Simulate:** replays the slate with correlated player outcomes, finds how often each player is in the optimal lineup, and runs your lineups through two preset DraftKings single-entry contests ($12, 980 entries and $5, 1,189 entries) plus an optional custom contest, against a field built from projected ownership, to estimate cash rate, top-1% rate and ROI for each.
 
 ## Updating
 Edit `index.html`, then bump the cache name in `sw.js` (for example `swish-v2` → `swish-v3`) so installed copies pick up the new version on next launch.
