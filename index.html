@@ -430,10 +430,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <select id="simIters" class="sel"><option value="500">500 (fast)</option><option value="1000" selected>1,000</option><option value="2500">2,500</option><option value="5000">5,000 (slow)</option></select></div>
         <div class="field"><span class="flabel">Contests</span>
           <div class="contests">
-            <label class="ct"><input type="checkbox" id="ctP0" checked><span><b>$12 Single Entry</b><small>980 entries · $10,000 prizes · top 229 paid · 1st $1,000</small></span></label>
-            <label class="ct"><input type="checkbox" id="ctP1" checked><span><b>$5 Single Entry</b><small>1,189 entries · $5,000 prizes · top 262 paid · 1st $500</small></span></label>
-            <label class="ct"><input type="checkbox" id="ctP2" checked><span><b>$12 Pick and Roll SE</b><small>490 entries · $5,000 prizes · top 114 paid · 1st $500</small></span></label>
-            <label class="ct"><input type="checkbox" id="ctP3" checked><span><b>$3 Sharpshooter (20 max)</b><small>15,854 entries · $40,000 prizes · top 3,996 paid · 1st $4,000</small></span></label>
+            <div class="contests" id="presetCts"></div>
             <label class="ct"><input type="checkbox" id="ctCustom"><span><b>Custom contest</b><small>Your own entries, fee and payouts</small></span></label>
           </div>
         </div>
@@ -484,7 +481,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v18</p>
+<p class="ver" id="ver">Swish v19</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -494,8 +491,8 @@ const SITES = {
     slots: [['PG'],['SG'],['SF'],['PF'],['C'],['PG','SG'],['SF','PF'],['PG','SG','SF','PF','C']],
     slotNames: ['PG','SG','SF','PF','C','G','F','UTIL'] },
   fd: { label: 'FanDuel Classic', cap: 60000, size: 9, maxTeam: 4, minTeams: 3, minGames: 1,
-    slots: [['PG'],['PG'],['SG'],['SG'],['SF'],['SF'],['PF'],['PF'],['C']],
-    slotNames: ['PG','PG','SG','SG','SF','SF','PF','PF','C'] },
+    slots: [['PG'],['SG'],['SF'],['PF'],['C'],['PG','SG','SF','PF'],['SF','PF','C'],['PG','SG','SF','PF','C'],['PG','SG','SF','PF','C']],
+    slotNames: ['PG','SG','SF','PF','C','G/F','F/C','UTIL','UTIL'] },
   sd: { label: 'DraftKings Showdown', cap: 50000, size: 6, maxTeam: 5, minTeams: 2, minGames: 1,
     slotNames: ['CPT','UTIL','UTIL','UTIL','UTIL','UTIL'], showdown: true },
 };
@@ -883,8 +880,12 @@ function parsePayouts(text) {
   }
   return rows.sort((a, b) => a.start - b.start);
 }
-function autoPayouts(entries, fee, { rake = 0.15, paidFrac = 0.22, minMult = 1.8, decay = 1.12 } = {}) {
-  const pool = entries * fee * (1 - rake);
+function autoPayouts(entries, fee, { rake = 0.15, paidFrac = 0.22, minMult = 1.8, decay = 1.12, pool: poolIn = null, first = null } = {}) {
+  if (first && !arguments[2].decay) { // find the curve steepness that gives the stated first prize
+    let lo = 0.5, hi = 2.5; for (let k = 0; k < 40; k++) { const d = (lo + hi) / 2; const r = autoPayouts(entries, fee, { rake, paidFrac, minMult, decay: d, pool: poolIn }); if (r[0].pay > first) hi = d; else lo = d; }
+    return autoPayouts(entries, fee, { rake, paidFrac, minMult, decay: (lo + hi) / 2, pool: poolIn });
+  }
+  const pool = poolIn || entries * fee * (1 - rake);
   let paid = Math.max(1, Math.floor(entries * paidFrac));
   const minCash = fee * minMult;
   while (paid > 1 && paid * minCash > pool * 0.6) paid = Math.floor(paid * 0.8);
@@ -1156,15 +1157,17 @@ function lateSwapOrder(site, l) {
   const flex = site.slots.map((s, i) => i).filter(i => site.slots[i].length > 1);
   const times = [...new Set(l.map(tipOf))].sort((a, b) => a - b);
   if (!flex.length || times.length < 2) return l;
-  // Try every legal arrangement; score = UTIL's game rank first, then G and F.
+  // Try every legal arrangement; score = UTIL slots' game ranks first, then the other flex
+  // slots (G/F on DraftKings; G/F then F/C on FanDuel).
   const rank = p => times.indexOf(tipOf(p));
-  const util = flex.reduce((a, i) => site.slots[i].length > site.slots[a].length ? i : a, flex[0]);
+  const widest = Math.max(...flex.map(i => site.slots[i].length));
+  const wt = i => site.slots[i].length === widest ? 1000 : site.slots[i].length >= 4 ? 30 : 1;
   const n = site.size, cur = new Array(n), used = new Array(l.length).fill(false);
   let best = null, bestScore = -1;
   const order = site.slots.map((s, i) => i).sort((a, b) => site.slots[a].length - site.slots[b].length);
   (function dfs(k) {
     if (k === n) {
-      let sc = 0; for (const i of flex) sc += rank(cur[i]) * (i === util ? 100 : 1);
+      let sc = 0; for (const i of flex) sc += rank(cur[i]) * wt(i);
       if (sc > bestScore) { bestScore = sc; best = cur.slice(); }
       return;
     }
@@ -1483,7 +1486,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctP3: $('#ctP3').checked, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
+    simIters: $('#simIters').value, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
 // ===== notices =====
@@ -1596,7 +1599,7 @@ function renderResults() {
       ps.map(p => { const e = c[p.key] / N * 100; return `<tr><td class="pname">${esc(p.name)}</td><td class="pos">${p.pos.join('/')}</td><td class="team">${esc(p.team)}</td><td class="n">${money(p.salary)}</td><td class="n">${f1(p.proj)}</td><td class="n">${f1(p.own)}</td><td class="n">${c[p.key]}</td><td><span class="exp" style="justify-content:flex-start"><i style="width:${Math.max(2, e * 1.2)}px"></i><span class="num">${Math.round(e)}%</span></span></td></tr>`; }).join('') + '</tbody></table>';
   }
   const swapOn = settings().lateSwap !== false && site.slots && !site.showdown, timed = S.players.some(p => tipOf(p) != null);
-  const swapNote = !swapOn || !site.slots.some(x => x.length > 1) ? '' : timed ? ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F, the latest in UTIL.' : ' Add tip times (Vegas lines panel or a DraftKings salary file) to order slots for late swap.';
+  const swapNote = !swapOn || !site.slots.some(x => x.length > 1) ? '' : timed ? (S.site === 'fd' ? ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F and F/C, the latest in UTIL.' : ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F, the latest in UTIL.') : ' Add tip times (Vegas lines panel or a DraftKings salary file) to order slots for late swap.';
   $('#exportMeta').textContent = (S.source === 'sample' ? 'Sample IDs are fictional. Import a real salary file to get an upload-ready CSV.' : `Upload format for ${site.label} using player IDs from ${S.fileName}.`) + swapNote;
 }
 
@@ -1760,7 +1763,7 @@ addEventListener('drop', e => {
 
 // ===== simulation UI =====
 const CONTESTS = [
-  { name: '$12 Single Entry', short: '$12 SE-980', entries: 980, fee: 12, payouts: `1st $1,000.00
+  { id: 'se980', site: 'dk', name: '$12 Single Entry', short: '$12 SE-980', entries: 980, fee: 12, payouts: `1st $1,000.00
 2nd $500.00
 3rd $350.00
 4th $250.00
@@ -1777,7 +1780,7 @@ const CONTESTS = [
 85th - 115th $30.00
 116th - 161st $25.00
 162nd - 229th $20.00` },
-  { name: '$5 Single Entry', short: '$5 SE', entries: 1189, fee: 5, payouts: `1st $500.00
+  { id: 'se1189', site: 'dk', name: '$5 Single Entry', short: '$5 SE', entries: 1189, fee: 5, payouts: `1st $500.00
 2nd $300.00
 3rd $200.00
 4th $150.00
@@ -1793,7 +1796,7 @@ const CONTESTS = [
 36th - 55th $20.00
 56th - 95th $15.00
 96th - 262nd $10.00` },
-  { name: '$12 Pick and Roll SE', short: '$12 SE-490', entries: 490, fee: 12, payouts: `1st $500
+  { id: 'pr490', site: 'dk', name: '$12 Pick and Roll SE', short: '$12 SE-490', entries: 490, fee: 12, payouts: `1st $500
 2nd $400
 3rd $300
 4th $200
@@ -1807,7 +1810,8 @@ const CONTESTS = [
 21st-30th $35
 31st-55th $30
 56th-114th $25` },
-  { name: '$3 Sharpshooter (20 max)', short: '$3 SS-16K', entries: 15854, fee: 3, payouts: `1st $4,000
+  { id: 'fdfloat', site: 'fd', name: '$5K Wed Floater (59 max)', short: 'FD $3 Floater', entries: 1984, fee: 3, payouts: null, pool: 5000, first: 1000 },
+  { id: 'ss16k', site: 'dk', name: '$3 Sharpshooter (20 max)', short: '$3 SS-16K', entries: 15854, fee: 3, payouts: `1st $4,000
 2nd $2,000
 3rd $1,500
 4th $1,000
@@ -1833,9 +1837,20 @@ const CONTESTS = [
 702nd-1501st $6
 1502nd-3996th $5` },
 ];
+let CT_SEL = (() => { try { return JSON.parse(localStorage.getItem('swish:ctSel')) || {}; } catch (e) { return {}; } })();
+const ctOn = c => CT_SEL[c.id] ?? true;
+function renderContestList() {
+  const box = $('#presetCts'); if (!box) return;
+  const list = CONTESTS.filter(c => c.site === S.site);
+  box.innerHTML = list.length ? list.map(c => {
+    const pays = c.payouts ? parsePayouts(c.payouts) : autoPayouts(c.entries, c.fee, { pool: c.pool, first: c.first });
+    const pool = pays.reduce((a, r) => a + r.pay * (r.end - r.start + 1), 0), paid = pays[pays.length - 1].end;
+    return `<label class="ct"><input type="checkbox" data-ct="${c.id}"${ctOn(c) ? ' checked' : ''}><span><b>${esc(c.name)}</b><small>${money(c.fee)} · ${c.entries.toLocaleString()} entries · ${money(pool)} prizes · top ${paid.toLocaleString()} paid · 1st ${money(pays[0].pay)}${c.payouts ? '' : ' · payouts estimated'}</small></span></label>`;
+  }).join('') : `<p class="hint" style="margin:0;font-size:12px;color:var(--muted)">No saved contests for ${esc(SITES[S.site].label)}. Use a custom contest below.</p>`;
+}
 function selectedContests(st) {
   const out = [];
-  CONTESTS.forEach((c, i) => { if ($('#ctP' + i).checked) out.push({ name: c.name, short: c.short, entries: c.entries, fee: c.fee, payouts: parsePayouts(c.payouts), source: 'preset' }); });
+  CONTESTS.forEach((c, i) => { if (c.site === S.site && ctOn(c)) out.push({ name: c.name, short: c.short, entries: c.entries, fee: c.fee, payouts: c.payouts ? parsePayouts(c.payouts) : autoPayouts(c.entries, c.fee, { pool: c.pool, first: c.first }), source: c.payouts ? 'preset' : 'auto' }); });
   if ($('#ctCustom').checked) {
     const entries = Math.max(2, Math.round(st.entries || 10000)), fee = Math.max(0, st.fee ?? 5);
     let payouts = parsePayouts(st.payText); const pasted = payouts.length > 0;
@@ -2099,6 +2114,7 @@ function renderSim() {
   document.querySelectorAll('.views button').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === S.mainView));
   $('#optView').hidden = S.mainView !== 'opt'; $('#simView').hidden = S.mainView !== 'sim';
   $('#simSiteLabel').textContent = site.label;
+  if ($('#presetCts').dataset.site !== S.site) { renderContestList(); $('#presetCts').dataset.site = S.site; }
   { const done = !!(R && R.site === S.site); $('#simCt').textContent = done ? '✓' : ''; $('#simCt').hidden = !done; }
   document.querySelectorAll('#simTabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tab === S.simTab));
   const body = $('#simBody'), note = $('#simNote'), foot = $('#simFoot'), stats = $('#simStats');
@@ -2240,6 +2256,7 @@ $('#vegasW').addEventListener('input', () => { syncVegasW(); renderPool(); });
 $('#vegasAdj').addEventListener('change', () => { syncVegasW(); renderPool(); });
 const syncCustom = () => { $('#customBox').hidden = !$('#ctCustom').checked; };
 $('#ctCustom').addEventListener('change', syncCustom);
+$('#presetCts').addEventListener('change', e => { const i = e.target.closest('[data-ct]'); if (!i) return; CT_SEL[i.dataset.ct] = i.checked; try { localStorage.setItem('swish:ctSel', JSON.stringify(CT_SEL)); } catch (x) {} });
 $('#goSim').addEventListener('click', () => { S.mainView = 'sim'; S.simTab = 'mine'; renderSim(); scrollTo({ top: 0 }); runSim(); });
 [['sharp', 'sharpOut'], ['projConf', 'projConfOut'], ['gameCorr', 'gameOut'], ['teamCorr', 'teamOut']].forEach(([i, o]) => { const f = () => $('#' + o).textContent = $('#' + i).value + '%'; $('#' + i).addEventListener('input', f); f(); });
 
