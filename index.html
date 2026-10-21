@@ -245,6 +245,8 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .dist b { position: absolute; top: 1px; height: 8px; background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 2px; }
 .dist u { position: absolute; top: 0; width: 2px; height: 10px; background: var(--ink); }
 .ver { margin: 24px 0 0; text-align: center; font-family: var(--f-data); font-size: 11px; color: var(--muted); }
+.gppbox { display: grid; gap: 14px; border-left: 3px solid var(--accent); padding-left: 12px; }
+.lev { color: var(--accent); }
 .vlist { display: grid; gap: 8px; }
 .vrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); }
 .vrow .vt, .vrow .vi { grid-column: 1 / -1; font-size: 13px; }
@@ -326,6 +328,19 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <section class="panel" aria-label="Build settings">
       <div class="panel-h"><h2>Build</h2><span class="meta" id="siteLabel"></span></div>
       <div class="form">
+        <div class="field"><label for="lineType">Lineup type</label>
+          <select id="lineType" class="sel"><option value="proj">Projection (cash games)</option><option value="ceil">Ceiling</option><option value="small">Small Field GPP</option><option value="large">Large Field GPP</option></select>
+          <span class="hint" id="lineTypeHint"></span></div>
+        <div class="gppbox" id="gppBox" hidden>
+          <div class="field"><label for="ceilW">Leverage ceiling weight <output id="ceilWOut">100%</output></label><input type="range" id="ceilW" min="0" max="100" step="5" value="100">
+            <span class="hint">Blends ceiling and projection for the leverage score. 100% is pure ceiling.</span></div>
+          <div class="field" id="smallFadeBox"><label for="smallFade">Small Field ownership fade <output id="smallFadeOut">20%</output></label><input type="range" id="smallFade" min="0" max="100" step="5" value="20">
+            <span class="hint">Higher discounts popular players more.</span></div>
+          <div class="field" id="largeFadeBox"><label for="largeFade">Large Field ownership fade <output id="largeFadeOut">55%</output></label><input type="range" id="largeFade" min="0" max="100" step="5" value="55">
+            <span class="hint">Large fields reward being different, so chalk is faded harder by default.</span></div>
+          <div class="field"><label for="minProjG">Minimum projection <output id="minProjGOut">8 pts</output></label><input type="range" id="minProjG" min="0" max="20" step="1" value="8">
+            <span class="hint">Keeps low-minute players out of GPP lineups, even as salary savers.</span></div>
+        </div>
         <div class="two">
           <div class="field"><label for="nLineups">Lineups</label><input type="number" id="nLineups" min="1" max="300" value="20"></div>
           <div class="field"><label for="uniq">Min unique</label><input type="number" id="uniq" min="1" max="9" value="2"></div>
@@ -340,9 +355,6 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <div class="field"><label for="maxOwn">Max total own%</label><input type="number" id="maxOwn" min="0" step="5" placeholder="none"></div>
           <div class="field"><label for="globalMax">Default max exp%</label><input type="number" id="globalMax" min="1" max="100" placeholder="100"></div>
         </div>
-        <div class="field"><label for="optFor">Optimize for</label>
-          <select id="optFor" class="sel"><option value="proj">Median projection (cash)</option><option value="ceil">Ceiling (tournaments)</option></select>
-          <span class="hint">Ceiling uses each player's upside number when your projections include one.</span></div>
         <label class="check"><input type="checkbox" id="skipOut" checked> Skip players tagged Out</label>
       </div>
       <div class="build">
@@ -369,7 +381,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 </div>
 
 <section class="panel results" id="results" hidden>
-  <div class="panel-h"><h2>Lineups</h2>
+  <div class="panel-h"><h2>Lineups</h2><span class="meta" id="luType"></span>
     <div class="seg" role="tablist" id="resTabs" style="margin-left:auto">
       <button data-tab="lineups" aria-pressed="true">Lineups</button>
       <button data-tab="exposure" aria-pressed="false">Exposure</button>
@@ -462,7 +474,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v10</p>
+<p class="ver" id="ver">Swish v11</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1201,7 +1213,8 @@ function importFD(rows, fileName) {
 }
 const P_NAME = ['dkname', 'fdname', 'name', 'player', 'player name', 'playername', 'full name', 'nickname'];
 const P_PROJ = ['proj', 'projection', 'projected', 'fpts', 'proj pts', 'projected points', 'points', 'fp', 'median', 'dk proj', 'fd proj', 'dk points', 'fd points', 'ppg projection'];
-const P_OWN = ['projown', 'own', 'own%', 'ownership', 'pown', 'pown%', 'proj own', 'projected ownership', 'own %'];
+const P_OWN = ['projown', 'small field', 'own', 'own%', 'ownership', 'pown', 'pown%', 'proj own', 'projected ownership', 'own %'];
+const P_OWNL = ['large field', 'ownlarge', 'own large', 'large own', 'large field own', 'lf own', 'gpp own'];
 const P_CEIL = ['ceiling', 'ceil', 'upside', 'proj ceiling', 'p90', '90th'];
 const P_ID = ['dkslateid', 'dk id', 'dkid', 'fdslateid', 'fd id', 'fdid', 'id', 'playerid', 'player id'];
 const pickCol = (r, list) => { for (const k of list) if (r[k] != null && r[k] !== '') return r[k]; return null; };
@@ -1214,10 +1227,10 @@ function slateFromProjections(T, fileName) {
     const name = pickCol(r, P_NAME), id = pickCol(r, P_ID), salary = numOf(pickCol(r, ['salary', 'sal', 'dk salary', 'fd salary']));
     const team = (r['team'] || r['tm'] || '').toUpperCase(), opp = (r['opp'] || r['opponent'] || '').toUpperCase();
     if (!name || !id || !salary || !team) continue;
-    const proj = numOf(pickCol(r, P_PROJ)) ?? 0, own = numOf(pickCol(r, P_OWN)) ?? 0, ceil = numOf(pickCol(r, P_CEIL));
+    const proj = numOf(pickCol(r, P_PROJ)) ?? 0, own = numOf(pickCol(r, P_OWN)) ?? 0, ceil = numOf(pickCol(r, P_CEIL)), ownLarge = numOf(pickCol(r, P_OWNL));
     players.push({ key: 'p' + (players.length + 1), id: String(id), name: r['player'] || name, team, opp,
       game: opp ? [team, opp].sort().join(' v ') : team, pos: (r['pos'] || r['position'] || '').toUpperCase().split('/').filter(Boolean),
-      salary, base: proj, proj, ceil, own, baseOwn: own, minExp: null, maxExp: null, status: '', lock: false, excl: false });
+      salary, base: proj, proj, ceil, own, baseOwn: own, ownLarge, minExp: null, maxExp: null, status: '', lock: false, excl: false });
   }
   const isFD = T.some(r => (r['site'] || '').toUpperCase() === 'FD');
   return { site: isFD ? 'fd' : 'dk', players };
@@ -1253,11 +1266,12 @@ function importProjections(text, fileName, quiet) {
   for (const r of T) {
     const ps = find(r);
     if (!ps.length) { miss.push(pickCol(r, P_NAME) || '?'); continue; }
-    const pr = numOf(pickCol(r, P_PROJ)), ow = numOf(pickCol(r, P_OWN)), ce = numOf(pickCol(r, P_CEIL));
+    const pr = numOf(pickCol(r, P_PROJ)), ow = numOf(pickCol(r, P_OWN)), ce = numOf(pickCol(r, P_CEIL)), ol = numOf(pickCol(r, P_OWNL));
     for (const p of ps) {
       if (pr != null) p.proj = p.base = pr;
       if (ow != null) p.own = p.baseOwn = ow;
       if (ce != null) p.ceil = ce;
+      if (ol != null) p.ownLarge = ol;
     }
     hit++;
   }
@@ -1379,7 +1393,7 @@ function restore() {
 }
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
-  return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), optFor: $('#optFor').value, skipOut: $('#skipOut').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
+  return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
     simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
@@ -1471,18 +1485,21 @@ function renderResults() {
   const sal = l => l.reduce((a, p, i) => a + (site.showdown && i === 0 ? p.cptSalary : p.salary), 0);
   const own = l => l.reduce((a, p) => a + (p.own || 0), 0);
   const ceil = l => l.reduce((a, p, i) => a + (p.ceil || p.proj) * (site.showdown && i === 0 ? 1.5 : 1), 0);
-  const L = S.lineups.map((l, i) => ({ l, i, pts: pts(l), sal: sal(l), own: own(l), ceil: ceil(l) }));
+  const T = S.lineupType || 'proj', gpp = isGpp(T);
+  const lev = l => l.reduce((a, p, i) => a + buildScore(p, S.lineupSt || {}, T) * (site.showdown && i === 0 ? 1.5 : 1), 0);
+  const L = S.lineups.map((l, i) => ({ l, i, pts: pts(l), sal: sal(l), own: own(l), ceil: ceil(l), lev: gpp ? lev(l) : 0 }));
+  $('#luType').textContent = LT_LABEL[T] + (gpp ? ' GPP' : '');
   const top = Math.max(...L.map(x => x.pts)), avg = L.reduce((a, x) => a + x.pts, 0) / L.length;
   const uniqPlayers = new Set(S.lineups.flat().map(p => p.key)).size;
-  $('#stats').innerHTML = [['Lineups', L.length], ['Top proj', f1(top)], ['Avg proj', f1(avg)], ['Avg ceiling', f1(L.reduce((a, x) => a + x.ceil, 0) / L.length)], ['Avg salary', money(L.reduce((a, x) => a + x.sal, 0) / L.length)], ['Players used', uniqPlayers]]
+  $('#stats').innerHTML = [['Lineups', L.length], ['Top proj', f1(top)], ['Avg proj', f1(avg)], ['Avg ceiling', f1(L.reduce((a, x) => a + x.ceil, 0) / L.length)], ['Avg salary', money(L.reduce((a, x) => a + x.sal, 0) / L.length)], ['Avg own', Math.round(L.reduce((a, x) => a + x.own, 0) / L.length) + '%'], ...(gpp ? [['Avg leverage', f1(L.reduce((a, x) => a + x.lev, 0) / L.length)]] : []), ['Players used', uniqPlayers]]
     .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
   document.querySelectorAll('#resTabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tab === S.tab));
   if (S.tab === 'lineups') {
-    $('#resBody').innerHTML = `<table class="lu"><thead><tr><th>#</th>${site.slotNames.map(s => `<th>${s}</th>`).join('')}<th class="n">Salary</th><th class="n">Proj</th><th class="n">Ceil</th><th class="n">Own%</th></tr></thead><tbody>` +
+    $('#resBody').innerHTML = `<table class="lu"><thead><tr><th>#</th>${site.slotNames.map(s => `<th>${s}</th>`).join('')}<th class="n">Salary</th><th class="n">Proj</th><th class="n">Ceil</th><th class="n">Own%</th>${gpp ? '<th class="n">Leverage</th>' : ''}</tr></thead><tbody>` +
       L.map(x => `<tr><td class="rank">${String(x.i + 1).padStart(3, '0')}</td>${x.l.map((p, i) => {
         const c = site.showdown && i === 0;
         return `<td class="slot"><span class="pl${c ? ' cpt' : ''}"><b>${esc(p.name)}</b><small>${esc(p.team)} · ${money(c ? p.cptSalary : p.salary)} · ${f1(p.proj * (c ? 1.5 : 1))}</small></span></td>`;
-      }).join('')}<td class="n"><span class="cap" title="${money(site.cap - x.sal)} left"><span>${money(x.sal)}</span><i style="--w:${(x.sal / site.cap * 100).toFixed(1)}%"></i></span></td><td class="n"><b>${f1(x.pts)}</b></td><td class="n">${f1(x.ceil)}</td><td class="n">${f1(x.own)}</td></tr>`).join('') + '</tbody></table>';
+      }).join('')}<td class="n"><span class="cap" title="${money(site.cap - x.sal)} left"><span>${money(x.sal)}</span><i style="--w:${(x.sal / site.cap * 100).toFixed(1)}%"></i></span></td><td class="n"><b>${f1(x.pts)}</b></td><td class="n">${f1(x.ceil)}</td><td class="n">${f1(x.own)}</td>${gpp ? `<td class="n lev">${f1(x.lev)}</td>` : ''}</tr>`).join('') + '</tbody></table>';
   } else {
     const c = expCounts(); const N = S.lineups.length;
     const ps = S.players.filter(p => c[p.key]).sort((a, b) => c[b.key] - c[a.key]);
@@ -1498,6 +1515,31 @@ function uploadCSV() {
   return head + '\n' + S.lineups.map(l => l.map((p, i) => site.showdown && i === 0 ? p.cptId : p.id).join(',')).join('\n') + '\n';
 }
 
+// ===== lineup types (Small / Large Field leverage, as in Gridlock) =====
+const LT_LABEL = { proj: 'Projection', ceil: 'Ceiling', small: 'Small Field', large: 'Large Field' };
+const isGpp = t => t === 'small' || t === 'large';
+// Leverage = (ceiling weight × ceiling + rest × projection) × (1 − fade × ownership / 100)
+function buildScore(p, st, type) {
+  type = type || st.lineType || 'proj';
+  if (type === 'proj') return p.proj;
+  const ceil = p.ceil || p.proj * 1.2;
+  if (type === 'ceil') return ceil;
+  const cw = (st.ceilW ?? 100) / 100, blended = cw * ceil + (1 - cw) * p.proj;
+  const fade = (type === 'small' ? (st.smallFade ?? 20) : (st.largeFade ?? 55)) / 100;
+  const own = type === 'large' && p.ownLarge != null ? p.ownLarge : (p.own || 0);
+  return blended * Math.max(0.05, 1 - fade * own / 100);
+}
+const gppDefaults = (type, site) => isGpp(type) ? { maxExp: type === 'large' ? 30 : 40, minSal: Math.round(site.cap * 0.96 / 100) * 100 } : { maxExp: null, minSal: 0 };
+function syncLineType() {
+  const t = $('#lineType').value, site = SITES[S.site], d = gppDefaults(t, site);
+  $('#gppBox').hidden = !isGpp(t); $('#smallFadeBox').hidden = t !== 'small'; $('#largeFadeBox').hidden = t !== 'large';
+  $('#lineTypeHint').textContent = t === 'proj' ? 'Highest projected points. Best for cash games and double-ups.'
+    : t === 'ceil' ? "Highest ceilings, using each player's upside number when your projections include one."
+    : `Ranks players by upside discounted by ownership. Unless you set your own, max exposure defaults to ${d.maxExp}% and min salary to ${money(d.minSal)}.`;
+  $('#minSal').placeholder = isGpp(t) ? String(d.minSal) : 'none'; $('#globalMax').placeholder = isGpp(t) ? String(d.maxExp) : '100';
+  [['ceilW', 'ceilWOut', '%'], ['smallFade', 'smallFadeOut', '%'], ['largeFade', 'largeFadeOut', '%'], ['minProjG', 'minProjGOut', ' pts']].forEach(([i, o, u]) => $('#' + o).textContent = $('#' + i).value + u);
+}
+
 // ===== build =====
 let building = false;
 async function build() {
@@ -1505,17 +1547,20 @@ async function build() {
   const site = SITES[S.site]; const st = settings();
   const N = Math.max(1, Math.min(300, Math.round(st.nLineups || 1)));
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
-  const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && (p.proj > 0 || p.lock)), st);
+  const type = st.lineType || 'proj', gd = gppDefaults(type, site);
+  const minProjG = isGpp(type) ? (st.minProjG ?? 8) : 0;
+  const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && (p.proj > 0 || p.lock) && (p.lock || p.proj >= minProjG)), st);
   const locks = S.players.filter(p => p.lock && !p.excl && !S.gamesOff.has(p.game)).map(p => p.key);
+  const globalMax = st.globalMax ?? gd.maxExp, minSal = st.minSal ?? gd.minSal;
   if (locks.length > site.size) return notify('err', `You locked ${locks.length} players but a lineup holds ${site.size}.`);
   const maxExp = {}, minExp = {};
   for (const p of pool) {
-    const mx = p.maxExp ?? st.globalMax; if (mx != null && mx < 100) maxExp[p.key] = mx;
+    const mx = p.maxExp ?? globalMax; if (mx != null && mx < 100) maxExp[p.key] = mx;
     if (p.minExp) minExp[p.key] = p.minExp;
   }
   const players = [];
   for (const p of pool) {
-    const target = st.optFor === 'ceil' && p.ceil ? p.ceil : p.proj;
+    const target = buildScore(p, st, type);
     const row = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: target, own: p.own || 0, src: p };
     if (site.showdown) { players.push({ ...row, cpt: true, salary: p.cptSalary }); players.push({ ...row, salary: p.salary }); }
     else players.push({ ...row, salary: p.salary });
@@ -1523,7 +1568,7 @@ async function build() {
   building = true; $('#buildBtn').disabled = true; $('#buildBtn').textContent = 'Building…';
   const out = []; const t0 = performance.now(); let err = null;
   try {
-    const gen = generate(S.site, players, { lineups: N, uniq, rand: st.rand || 0, minSal: st.minSal || 0, maxOwn: st.maxOwn || 0, maxTeam: st.maxTeam || 0, locks, excl: [], minExp, maxExp });
+    const gen = generate(S.site, players, { lineups: N, uniq, rand: st.rand || 0, minSal: minSal || 0, maxOwn: st.maxOwn || 0, maxTeam: st.maxTeam || 0, locks, excl: [], minExp, maxExp });
     let last = performance.now();
     for (const r of gen) {
       if (r.error) { err = r.error; break; }
@@ -1533,7 +1578,7 @@ async function build() {
     }
   } catch (e) { err = 'The optimizer hit an error: ' + e.message; }
   building = false; $('#buildBtn').disabled = false; $('#buildBtn').textContent = 'Build lineups';
-  S.lineups = out; S.builtSite = S.site; S.tab = S.tab || 'lineups'; if (S.sim) S.sim.mineStale = true;
+  S.lineups = out; S.builtSite = S.site; S.lineupType = type; S.lineupSt = { ceilW: st.ceilW, smallFade: st.smallFade, largeFade: st.largeFade }; S.tab = S.tab || 'lineups'; if (S.sim) S.sim.mineStale = true;
   $('#buildMsg').textContent = out.length ? `Built ${out.length} lineup${out.length === 1 ? '' : 's'} in ${((performance.now() - t0) / 1000).toFixed(2)}s.` : 'No lineups built.';
   if (err) notify('err', esc(err));
   $('#outwrap').hidden = true;
@@ -1761,9 +1806,10 @@ async function buildBestLineups({ site, st, pool, sim, opt, field, contests, ite
   const locks = S.players.filter(p => p.lock && poolKeys.has(p.key)).map(p => p.key);
   const mkRows = f => { const rows = []; for (const p of pool) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: f(p), own: p.own || 0, src: p }; if (sd) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); } return rows; };
   const recipes = [
-    { n: Math.round(C * 0.4), rows: mkRows(p => p.proj), rand: 15 },
-    { n: Math.round(C * 0.25), rows: mkRows(p => p.ceil || p.proj * 1.2), rand: 10 },
-    { n: Math.round(C * 0.25), rows: mkRows(p => p.proj * (1 - 0.25 * Math.min(1, (p.own || 0) / 60))), rand: 12 },
+    { n: Math.round(C * 0.35), rows: mkRows(p => p.proj), rand: 15 },
+    { n: Math.round(C * 0.15), rows: mkRows(p => buildScore(p, st, 'ceil')), rand: 10 },
+    { n: Math.round(C * 0.2), rows: mkRows(p => buildScore(p, st, 'small')), rand: 10 },
+    { n: Math.round(C * 0.2), rows: mkRows(p => buildScore(p, st, 'large')), rand: 10 },
   ];
   const cand = new Map(); let done = 0, last = performance.now();
   msg(`Building ${C} candidate lineups…`);
@@ -2010,6 +2056,8 @@ $('#simBody').addEventListener('click', e => {
 $('#simBtn').addEventListener('click', () => runSim());
 $('#bestBtn').addEventListener('click', () => runSim('best'));
 $('#pullOdds').addEventListener('click', pullVegas);
+$('#lineType').addEventListener('change', syncLineType);
+['ceilW', 'smallFade', 'largeFade', 'minProjG'].forEach(i => $('#' + i).addEventListener('input', syncLineType));
 try { const k = localStorage.getItem('swish:oddsKey'); if (k) $('#oddsKey').value = k; } catch (e) {}
 $('#vegasGames').addEventListener('change', e => {
   const i = e.target.closest('input[data-vf]'); if (!i) return; const tr = i.closest('.vrow'); const k = tr.dataset.vk, a = tr.dataset.a, b = tr.dataset.b;
@@ -2031,6 +2079,7 @@ $('#randOut').textContent = $('#rand').value + '%';
 [['sharp', 'sharpOut'], ['gameCorr', 'gameOut'], ['teamCorr', 'teamOut']].forEach(([i, o]) => $('#' + o).textContent = $('#' + i).value + '%');
 syncCustom();
 syncVegasW();
+syncLineType();
 render();
 </script>
 <script>
