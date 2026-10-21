@@ -188,8 +188,14 @@ details.adv[open] summary { margin-bottom: 10px; }
 details.adv .form { padding: 0; }
 .pos-val { color: var(--lock); font-weight: 500; }
 .neg-val { color: var(--excl); }
-.lnames { white-space: normal; min-width: 220px; max-width: 360px; font-size: 12.5px; line-height: 1.35; }
-.lnames .c { color: var(--accent); font-weight: 600; }
+.lnames { white-space: normal; min-width: 460px; vertical-align: top; }
+.lu2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: column; gap: 3px 16px; }
+.lu2 > span { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: baseline; gap: 6px; font-size: 12.5px; line-height: 1.3; }
+.lu2 i { font-style: normal; font-family: var(--f-data); font-size: 10.5px; color: var(--muted); }
+.lu2 b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lu2 small { font-family: var(--f-data); font-size: 11px; color: var(--muted); }
+.lu2 .c i, .lu2 .c b { color: var(--accent); }
+@media (max-width: 560px) { .lnames { min-width: 240px; } .lu2 { grid-template-columns: minmax(0, 1fr); grid-auto-flow: row; grid-template-rows: none !important; } }
 .flabel { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .contests { display: grid; gap: 6px; }
 .ct { display: flex; gap: 9px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); cursor: pointer; }
@@ -476,7 +482,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v14</p>
+<p class="ver" id="ver">Swish v15</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -2035,6 +2041,12 @@ function whyHTML(R, r) {
     </div></div>`;
 }
 
+// Full lineup for sim tables: slot, full name and team, in late-swap slot order.
+function lineupNames(l) {
+  const site = SITES[S.site]; const o = site.showdown ? l : swapOrder(l);
+  return `<div class="lu2" style="grid-template-rows: repeat(${Math.ceil(o.length / 2)}, auto)">${o.map((p, j) => { const c = site.showdown && j === 0;
+    return `<span${c ? ' class="c"' : ''}><i>${site.slotNames[j] || ''}</i><b title="${esc(p.name)}">${esc(p.name)}</b><small>${esc(p.team)}</small></span>`; }).join('')}</div>`;
+}
 function sortRows(rows, sort, get) {
   return rows.sort((a, b) => { const x = get(a, sort.key), y = get(b, sort.key); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === 'string' ? x.localeCompare(y) : x - y) * sort.dir; });
 }
@@ -2088,7 +2100,7 @@ function renderSim() {
     const ncol = 7 + CT.length * 4;
     body.innerHTML = `<table class="simt"><thead><tr>${th('i', '#', S.simSort, false)}<th></th><th>Lineup</th>${th('proj', 'Proj', S.simSort)}${th('mean', 'Sim avg', S.simSort)}<th>Range (10th–99th)</th>${th('p99', '99th', S.simSort)}` +
       CT.map((c, ci) => cth(`c${ci}.cash`, `${esc(c.short)}<br>Cash`, true) + cth(`c${ci}.top1`, `${esc(c.short)}<br>Top 1%`) + cth(`c${ci}.win`, `${esc(c.short)}<br>Win`) + cth(`c${ci}.roi`, `${esc(c.short)}<br>ROI`)).join('') + `</tr></thead><tbody>` +
-      rows.map(r => `<tr><td class="rank">${String(r.i + 1).padStart(3, '0')}</td><td><button class="why-btn" data-why="${r.i}" aria-expanded="${S.whyOpen === r.i}">Why</button></td><td class="lnames">${r.l.map((p, j) => site.showdown && j === 0 ? `<span class="c">${esc(lastName(p.name))} (C)</span>` : esc(lastName(p.name))).join(' · ')}</td>
+      rows.map(r => `<tr><td class="rank">${String(r.i + 1).padStart(3, '0')}</td><td><button class="why-btn" data-why="${r.i}" aria-expanded="${S.whyOpen === r.i}">Why</button></td><td class="lnames">${lineupNames(r.l)}</td>
         <td class="n">${f1(r.proj)}</td><td class="n">${f1(r.mean)}</td>
         <td><span class="dist" title="10th ${f1(r.p10)} · median ${f1(r.p50)} · 90th ${f1(r.p90)} · 99th ${f1(r.p99)}"><i style="left:${X(r.p10)}%;width:${(X(r.p99) - X(r.p10)).toFixed(1)}%"></i><b style="left:${X(r.p10)}%;width:${(X(r.p90) - X(r.p10)).toFixed(1)}%"></b><u style="left:${X(r.p50)}%"></u></span></td>
         <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.win)}</td><td class="n">${roiCell(x.roi)}</td>`).join('') + `</tr>` + (S.whyOpen === r.i ? `<tr class="why-row"><td colspan="${ncol}">${whyHTML(R, r)}</td></tr>` : '')).join('') + '</tbody></table>';
@@ -2135,7 +2147,7 @@ function renderSim() {
     const L = R.opt.lineups.slice(0, 100);
     body.innerHTML = `<table class="simt"><thead><tr><th>#</th><th>Lineup</th><th class="n">Optimal</th><th class="n">Salary</th><th class="n">Proj</th><th class="n">Own sum</th></tr></thead><tbody>` +
       L.map((x, i) => { const ps = x.rows; const sal = ps.reduce((a, p) => a + p.salary, 0); const pr = ps.reduce((a, p, j) => a + p.src.proj * (site.showdown && j === 0 ? 1.5 : 1), 0); const ow = ps.reduce((a, p) => a + (p.src.own || 0), 0);
-        return `<tr><td class="rank">${String(i + 1).padStart(3, '0')}</td><td class="lnames">${ps.map((p, j) => site.showdown && j === 0 ? `<span class="c">${esc(lastName(p.src.name))} (C)</span>` : esc(lastName(p.src.name))).join(' · ')}</td><td class="n">${pctFmt(x.count / R.opt.iters * 100)}</td><td class="n">${money(sal)}</td><td class="n">${f1(pr)}</td><td class="n">${f1(ow)}</td></tr>`; }).join('') + '</tbody></table>';
+        return `<tr><td class="rank">${String(i + 1).padStart(3, '0')}</td><td class="lnames">${lineupNames(ps.map(p => p.src))}</td><td class="n">${pctFmt(x.count / R.opt.iters * 100)}</td><td class="n">${money(sal)}</td><td class="n">${f1(pr)}</td><td class="n">${f1(ow)}</td></tr>`; }).join('') + '</tbody></table>';
     note.innerHTML += `<div class="simnote">Each replay has its own best lineup. On NBA slates few lineups repeat, so read this list for player combinations that keep showing up rather than for one lineup to play.</div>`;
     foot.hidden = false;
     foot.innerHTML = `<span class="meta">Add the most frequent sim optimals to your lineup set.</span><span class="keep">Add top <input type="number" id="addN" min="1" max="${L.length}" value="${Math.min(20, L.length)}" aria-label="Number of sim optimals to add"></span><button class="btn primary" id="addBtn">Add to my lineups</button>`;
