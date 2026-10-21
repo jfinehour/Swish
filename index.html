@@ -482,7 +482,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v16</p>
+<p class="ver" id="ver">Swish v17</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1921,10 +1921,12 @@ async function buildBestLineups({ site, st, pool, sim, opt, field, contests, ite
   const locks = S.players.filter(p => p.lock && poolKeys.has(p.key)).map(p => p.key);
   const mkRows = f => { const rows = []; for (const p of pool) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: f(p), own: p.own || 0, src: p }; if (sd) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); } return rows; };
   const recipes = [
-    { n: Math.round(C * 0.35), rows: mkRows(p => p.proj), rand: 15 },
-    { n: Math.round(C * 0.15), rows: mkRows(p => buildScore(p, st, 'ceil')), rand: 10 },
-    { n: Math.round(C * 0.2), rows: mkRows(p => buildScore(p, st, 'small')), rand: 10 },
-    { n: Math.round(C * 0.2), rows: mkRows(p => buildScore(p, st, 'large')), rand: 10 },
+    { n: Math.round(C * 0.2), rows: mkRows(p => p.proj), rand: 2 },
+    { n: Math.round(C * 0.2), rows: mkRows(p => p.proj), rand: 8 },
+    { n: Math.round(C * 0.15), rows: mkRows(p => p.proj), rand: 15 },
+    { n: Math.round(C * 0.1), rows: mkRows(p => buildScore(p, st, 'ceil')), rand: 8 },
+    { n: Math.round(C * 0.15), rows: mkRows(p => buildScore(p, st, 'small')), rand: 8 },
+    { n: Math.round(C * 0.1), rows: mkRows(p => buildScore(p, st, 'large')), rand: 8 },
   ];
   const cand = new Map(); let done = 0, last = performance.now();
   msg(`Building ${C} candidate lineups…`);
@@ -1937,32 +1939,53 @@ async function buildBestLineups({ site, st, pool, sim, opt, field, contests, ite
   if (opt) for (const x of opt.lineups.slice(0, Math.round(C * 0.1))) {
     const l = x.rows.map(r => r.src); if (locks.every(k => l.some(p => p.key === k))) { const g = sigOf(l); if (!cand.has(g)) cand.set(g, l); }
   }
+  // your current lineups compete too, so sim-built can never do worse than them by omission
+  const poolBy = new Map(pool.map(p => [p.key, p])); const yours = new Set(); const mineNow = [];
+  if (S.builtSite === S.site) for (const l0 of S.lineups) {
+    const l = l0.map(p => poolBy.get(p.key)); if (l.some(x => !x)) continue;
+    const g = sigOf(l); if (!cand.has(g)) cand.set(g, l); yours.add(g); mineNow.push(l);
+  }
   const poolL = [...cand.values()];
   if (!poolL.length) throw new Error('No candidate lineups fit your Optimizer settings.');
-  msg(`Running ${poolL.length} candidates through ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
-  const scr = await contestSimMulti(S.site, sim, poolL.map(l => l.map(p => p.key)), field, contests, f => simProgress({ from: 62, to: 85 }, f));
+  const keysOf = L => L.map(l => l.map(p => p.key));
   const metric = st.rankBy || 'avgroi';
   const score = r => r.c.reduce((a, x) => a + (metric === 'top1' ? x.top1 : metric === 'cash' ? x.cash : x.roi), 0) / r.c.length;
+  const simOpts = seed => ({ iters, seed, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap });
+  // Stage 1: every candidate on the first set of replays
+  msg(`Stage 1 of 3: running ${poolL.length} candidates through ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
+  const scr = await contestSimMulti(S.site, sim, keysOf(poolL), field, contests, f => simProgress({ from: 62, to: 78 }, f));
   const ranked = scr.map((r, i) => ({ r, i, sc: score(r) })).sort((a, b) => b.sc - a.sc);
+  // Stage 2: the leaders again on new replays; rank on both sets so one lucky run can't carry a lineup
+  const M = Math.min(ranked.length, Math.max(3 * N, 45));
+  const top = ranked.slice(0, M);
+  msg(`Stage 2 of 3: re-checking the top ${M} on new replays…`);
+  const simB = await simulateScores(pool, simOpts(((Date.now() * 7) % 1e9) | 0));
+  const scrB = await contestSimMulti(S.site, simB, keysOf(top.map(x => poolL[x.i])), field, contests, f => simProgress({ from: 78, to: 88 }, f));
+  top.forEach((x, k) => { x.sc2 = (x.sc + score(scrB[k])) / 2; });
+  const order2 = top.slice().sort((a, b) => b.sc2 - a.sc2).concat(ranked.slice(M));
   // greedy pick that respects min unique and max exposure from the Optimizer
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
   const cap = p => { const mx = p.maxExp ?? st.globalMax ?? DEFAULT_MAX_EXP; return mx != null && mx < 100 ? Math.max(1, Math.floor(mx / 100 * N + 1e-9)) : N; };
   const used = {}; const picked = []; let skipped = 0;
-  for (const x of ranked) {
+  for (const x of order2) {
     if (picked.length >= N) break;
     const l = poolL[x.i]; const ks = new Set(l.map(p => p.key));
     if (l.some(p => (used[p.key] || 0) >= cap(p))) { skipped++; continue; }
     if (picked.some(y => site.size - poolL[y.i].filter(p => ks.has(p.key)).length < uniq)) { skipped++; continue; }
     picked.push(x); l.forEach(p => used[p.key] = (used[p.key] || 0) + 1);
   }
-  msg(`Re-scoring the top ${picked.length} on fresh replays…`);
-  const simB = await simulateScores(pool, { iters, seed: ((Date.now() * 7) % 1e9) | 0, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap, onProgress: f => simProgress({ from: 85, to: 90 }, f) });
+  // Stage 3: report on a third, untouched set of replays, with your lineups scored alongside
+  msg(`Stage 3 of 3: scoring the ${picked.length} picks${mineNow.length ? ' and your lineups' : ''} on fresh replays…`);
+  const simC = await simulateScores(pool, simOpts(((Date.now() * 13 + 7) % 1e9) | 0));
   const lineups = picked.map(x => poolL[x.i]);
-  const val = await contestSimMulti(S.site, simB, lineups.map(l => l.map(p => p.key)), field, contests, f => simProgress({ from: 90, to: 100 }, f));
-  const avgOf = (arr, f) => arr.reduce((a, r) => a + f(r), 0) / arr.length;
+  const both = await contestSimMulti(S.site, simC, keysOf(lineups.concat(mineNow)), field, contests, f => simProgress({ from: 88, to: 100 }, f));
+  const val = both.slice(0, lineups.length), mineVal = both.slice(lineups.length);
+  const avgOf = (arr, f) => arr.length ? arr.reduce((a, r) => a + f(r), 0) / arr.length : null;
   const roiAvg = r => r.c.reduce((a, x) => a + x.roi, 0) / r.c.length;
   return { mine: val, lineups, candidates: poolL.length, metric, wanted: N, skipped,
-    screenRoi: avgOf(picked, x => roiAvg(x.r)), freshRoi: avgOf(val, roiAvg), poolRoi: avgOf(scr, roiAvg) };
+    fromYours: lineups.filter(l => yours.has(sigOf(l))).length, yoursCount: mineNow.length,
+    screenRoi: avgOf(picked, x => roiAvg(x.r)), freshRoi: avgOf(val, roiAvg), poolRoi: avgOf(scr, roiAvg),
+    mineFreshRoi: avgOf(mineVal, roiAvg), mineFreshPer: contests.map((c, ci) => avgOf(mineVal, r => r.c[ci].roi)) };
 }
 
 // ----- ROI drivers -----
@@ -2083,7 +2106,7 @@ function renderSim() {
     }
     const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
     if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidate lineups by <b>${B.metric === 'top1' ? 'top 1% rate' : B.metric === 'cash' ? 'cash rate' : 'average ROI'}</b>${B.skipped ? `, skipping ${B.skipped} that broke your min-unique or exposure settings` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. On the replays used to pick them they averaged ${sgnPct(B.screenRoi)} ROI; on fresh replays they average <b>${sgnPct(B.freshRoi)}</b>, which is the number shown below. The whole candidate pool averaged ${sgnPct(B.poolRoi)}.</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates by <b>${B.metric === 'top1' ? 'top 1% rate' : B.metric === 'cash' ? 'cash rate' : 'average ROI'}</b>${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.skipped ? `, skipping ${B.skipped} that broke your min-unique or exposure settings` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. Leaders were checked on two separate sets of replays, and the numbers below come from a third, untouched set: <b>${sgnPct(B.freshRoi)}</b> average ROI.${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups on those same replays: ${sgnPct(B.mineFreshRoi)}</b> (${R.contests.map((c, ci) => `${esc(c.short)} ${sgnPct(B.mineFreshPer[ci])}`).join(', ')}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.</div>`;
     const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
