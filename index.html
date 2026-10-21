@@ -164,10 +164,10 @@ input.n.edited { color: var(--accent); font-weight: 500; }
 .stat span { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
 .stat b { font-family: var(--f-display); font-size: 24px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .lu td { font-size: 13px; }
-.lu td.slot { max-width: 150px; }
+.lu td.slot { min-width: 128px; max-width: 160px; white-space: normal; vertical-align: top; }
 .lu .pl { display: grid; line-height: 1.2; }
 .lu .pl b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.lu .pl small { font-family: var(--f-data); font-size: 11px; color: var(--muted); }
+.lu .pl small { font-family: var(--f-data); font-size: 11px; color: var(--muted); white-space: normal; }
 .lu .pl.cpt b { color: var(--accent); }
 .lu .rank { font-family: var(--f-data); color: var(--muted); font-size: 12px; }
 .cap { display: grid; gap: 3px; min-width: 90px; }
@@ -248,7 +248,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .gppbox { display: grid; gap: 14px; border-left: 3px solid var(--accent); padding-left: 12px; }
 .lev { color: var(--accent); }
 .vlist { display: grid; gap: 8px; }
-.vrow { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); }
+.vrow { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 6px 8px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); }
 .vrow .vt, .vrow .vi { grid-column: 1 / -1; font-size: 13px; }
 .vrow .vi { font-size: 12px; color: var(--muted); font-family: var(--f-data); }
 .vrow .vi b { color: var(--ink); font-weight: 500; }
@@ -356,6 +356,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <div class="field"><label for="globalMax">Default max exp%</label><input type="number" id="globalMax" min="1" max="100" placeholder="100"></div>
         </div>
         <label class="check"><input type="checkbox" id="skipOut" checked> Skip players tagged Out</label>
+        <label class="check"><input type="checkbox" id="lateSwap" checked> Order slots for late swap</label>
       </div>
       <div class="build">
         <button class="btn primary" id="buildBtn">Build lineups</button>
@@ -475,7 +476,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v13</p>
+<p class="ver" id="ver">Swish v14</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1093,6 +1094,7 @@ async function pullVegas() {
         if (mk.key === 'spreads') { const o = mk.outcomes.find(o => o.name === ev.home_team); if (o && o.point != null) spreads.push(o.point); }
       }
       if (!totals.length && !spreads.length) continue;
+      S.gameTimes = S.gameTimes || {}; if (ev.commence_time) S.gameTimes[want] = Date.parse(ev.commence_time);
       S.vegas[want] = { home: NBA_TEAMS[ev.home_team], away: NBA_TEAMS[ev.away_team], total: median(totals), homeSpread: median(spreads), books: (ev.bookmakers || []).length, src: 'api', at: Date.now() };
       matched++;
     }
@@ -1115,10 +1117,55 @@ function renderVegas() {
     return `<div class="vrow" data-vk="${k}" data-a="${a}" data-b="${b}">
       <div class="vt"><b>${a}</b> v <b>${b}</b>${v && v.home ? ` <small class="pos">at ${v.home}</small>` : ''}${v && v.src === 'manual' ? ' <small class="pos">· edited</small>' : ''}</div>
       <label>Total<input class="n" data-vf="total" type="number" step="0.5" value="${v && v.total != null ? v.total : ''}" placeholder="–"></label>
-      <label>${a} spread<input class="n" data-vf="spread" type="number" step="0.5" value="${sideA}" placeholder="–"></label>
+      <label title="${a} spread">${a} ±<input class="n" data-vf="spread" type="number" step="0.5" value="${sideA}" placeholder="–"></label>
+      <label>Tip<input class="n" data-vf="time" type="time" value="${(S.gameTimes || {})[k] ? new Date(S.gameTimes[k]).toTimeString().slice(0, 5) : ''}"></label>
       <div class="vi">${ia ? `Implied: ${a} <b>${f1(ia.implied)}</b> · ${b} <b>${f1(ib.implied)}</b>` : 'No line yet'}</div></div>`;
-  }).join('') + `</div><span class="hint" style="font-size:12px;color:var(--muted)">Favorite's spread is negative. Edit any number to override the pulled line.</span>`;
+  }).join('') + `</div><span class="hint" style="font-size:12px;color:var(--muted)">Spread (±) is from the first team's side; the favorite is negative. Tip times come from your DraftKings salary file or the line pull; edit any number to override.</span>`;
 }
+
+// ===== Game times and late-swap slot order =====
+// S.gameTimes: { [pairKey]: epoch ms } from the DraftKings salary file, The Odds API, or typed in.
+const tipOf = p => (S.gameTimes || {})[pairKey(p.team, p.opp)] ?? null;
+const fmtTip = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?([AP])M/i, (m, x) => x.toLowerCase());
+function parseDKTip(info) {
+  const m = /(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*(AM|PM)\s*ET/i.exec(info || ''); if (!m) return null;
+  let h = +m[4] % 12; if (/PM/i.test(m[6])) h += 12;
+  const mo = +m[1], off = mo >= 3 && mo <= 10 ? '-04:00' : '-05:00'; // Eastern daylight vs standard time
+  const t = Date.parse(`${m[3]}-${String(mo).padStart(2, '0')}-${String(+m[2]).padStart(2, '0')}T${String(h).padStart(2, '0')}:${m[5]}:00${off}`);
+  return isNaN(t) ? null : t;
+}
+// Fill a lineup's slots so the latest game sits in UTIL, the next latest in G and F, and the
+// earliest games in PG/SG/SF/PF/C. That leaves the most players swappable after early tips.
+function slotMatch(site, players, slotIdx) {
+  const S2 = site.slots, matchP = new Array(players.length).fill(-1), matchS = {};
+  const ok = (s, i) => players[i].pos.some(x => S2[s].includes(x));
+  const tryS = (s, seen) => { for (let i = 0; i < players.length; i++) if (ok(s, i) && !seen[i]) { seen[i] = 1; if (matchP[i] < 0 || tryS(matchP[i], seen)) { matchP[i] = s; matchS[s] = i; return true; } } return false; };
+  for (const s of slotIdx.slice().sort((a, b) => S2[a].length - S2[b].length)) if (!tryS(s, [])) return null;
+  return slotIdx.map(s => players[matchS[s]]);
+}
+function lateSwapOrder(site, l) {
+  if (!site.slots || site.showdown || !l.every(p => tipOf(p) != null)) return l;
+  const flex = site.slots.map((s, i) => i).filter(i => site.slots[i].length > 1);
+  const times = [...new Set(l.map(tipOf))].sort((a, b) => a - b);
+  if (!flex.length || times.length < 2) return l;
+  // Try every legal arrangement; score = UTIL's game rank first, then G and F.
+  const rank = p => times.indexOf(tipOf(p));
+  const util = flex.reduce((a, i) => site.slots[i].length > site.slots[a].length ? i : a, flex[0]);
+  const n = site.size, cur = new Array(n), used = new Array(l.length).fill(false);
+  let best = null, bestScore = -1;
+  const order = site.slots.map((s, i) => i).sort((a, b) => site.slots[a].length - site.slots[b].length);
+  (function dfs(k) {
+    if (k === n) {
+      let sc = 0; for (const i of flex) sc += rank(cur[i]) * (i === util ? 100 : 1);
+      if (sc > bestScore) { bestScore = sc; best = cur.slice(); }
+      return;
+    }
+    const s = order[k];
+    for (let j = 0; j < l.length; j++) if (!used[j] && l[j].pos.some(x => site.slots[s].includes(x))) { used[j] = true; cur[s] = l[j]; dfs(k + 1); used[j] = false; }
+  })(0);
+  return best || l;
+}
+const swapOrder = l => settings().lateSwap === false ? l : lateSwapOrder(SITES[S.site], l);
 
 // ===== helpers =====
 const $ = s => document.querySelector(s);
@@ -1211,9 +1258,10 @@ function importDK(rows, fileName) {
   rows = rows.filter(r => r['name'] && r['salary'] && r['id']);
   if (!rows.length) return notify('err', 'No players found in that DraftKings file.');
   const showdown = rows.some(r => (r['roster position'] || '').toUpperCase() === 'CPT');
-  const byKey = new Map();
+  const byKey = new Map(); const tips = {};
   for (const r of rows) {
     const g = gameOf(r['game info']); const team = (r['teamabbrev'] || '').toUpperCase();
+    if (g) { const t = parseDKTip(r['game info']); if (t) tips[pairKey(g[0], g[1])] = t; }
     const k = normName(r['name']) + '|' + team;
     let p = byKey.get(k);
     if (!p) {
@@ -1227,6 +1275,7 @@ function importDK(rows, fileName) {
     else { p.id = r['id']; p.salary = sal; }
   }
   const players = [...byKey.values()].filter(p => p.id && (!showdown || p.cptId));
+  S.gameTimes = tips;
   loadSlate(showdown ? 'sd' : 'dk', players, fileName);
 }
 function importFD(rows, fileName) {
@@ -1286,7 +1335,7 @@ function importProjections(text, fileName, quiet) {
   if (matched < T.length * 0.5) {
     const sl = slateFromProjections(T, fileName);
     if (sl.players.length >= SITES[sl.site].size) {
-      S.site = sl.site; S.players = sl.players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null;
+      S.site = sl.site; S.players = sl.players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null; S.gameTimes = {};
       save(); render();
       if (!quiet) notify('ok', `Loaded <b>${sl.players.length}</b> players from ${esc(fileName)} as a <b>${SITES[sl.site].label}</b> slate, with projections, ceilings, ownership and DraftKings IDs for upload.`);
       return;
@@ -1404,6 +1453,7 @@ const BUILTIN_CSV = `﻿"Player","Pos","Team","Opp","Salary","FPTS","Value","Cei
 "Maliq Brown","PF","SAS","OKC","$3,000","0.0","-18.0","0.0","0.0%","DK","MAIN","Default","44451532","Maliq Brown"`;
 function loadBuiltin() { importProjections(BUILTIN_CSV, BUILTIN_NAME, true); }
 function loadSample(site) {
+  S.gameTimes = {};
   if (site === 'dk') { S.source = 'sample'; S.players = []; return loadBuiltin(); }
   S.site = site; S.players = sampleSlate(site); S.source = 'sample'; S.fileName = ''; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null;
   save(); render();
@@ -1412,7 +1462,7 @@ function readFile(file, fn) { const r = new FileReader(); r.onload = () => fn(St
 
 // ===== persistence (per-browser convenience) =====
 function save() {
-  store.set('slate', { site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null });
+  store.set('slate', { site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null, gameTimes: S.gameTimes || {} });
   store.set('settings', settings());
 }
 function restore() {
@@ -1424,7 +1474,7 @@ function restore() {
 }
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
-  return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
+  return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
     simIters: $('#simIters').value, ctP0: $('#ctP0').checked, ctP1: $('#ctP1').checked, ctP2: $('#ctP2').checked, ctP3: $('#ctP3').checked, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
@@ -1495,7 +1545,7 @@ function renderPool() {
       <td><span class="tg"><button class="l" data-act="lock" aria-pressed="${p.lock}" aria-label="Lock ${esc(p.name)}" title="Lock">L</button><button class="x" data-act="excl" aria-pressed="${p.excl}" aria-label="Exclude ${esc(p.name)}" title="Exclude">X</button></span></td>
       <td><span class="pname">${esc(p.name)}</span>${tag}</td>
       <td class="pos">${p.pos.join('/')}</td>
-      <td class="team">${esc(p.team)} <small>v ${esc(p.opp)}</small>${vm && vm[p.team] ? `<br><small>${f1(vm[p.team].implied)} implied</small>` : ''}</td>
+      <td class="team">${esc(p.team)} <small>v ${esc(p.opp)}</small>${tipOf(p) != null ? ` <small>${fmtTip(tipOf(p))}</small>` : ''}${vm && vm[p.team] ? `<br><small>${f1(vm[p.team].implied)} implied</small>` : ''}</td>
       <td class="n">${money(p.salary)}${sdNote ? `<br><small class="pos">CPT ${money(p.cptSalary)}</small>` : ''}</td>
       <td class="n"><input class="n${p.proj !== p.base ? ' edited' : ''}" data-f="proj" type="number" step="0.1" value="${p.proj}" aria-label="Projection for ${esc(p.name)}">${vw && vm && vm[p.team] && p.proj ? `<span class="vadj">Vegas ${f1(p.proj * vegasProjFactor(p.team, vm, vw))}</span>` : ''}</td>
       <td class="n">${p.ceil ? f1(p.ceil) : '<span class="pos">–</span>'}</td>
@@ -1518,7 +1568,7 @@ function renderResults() {
   const ceil = l => l.reduce((a, p, i) => a + (p.ceil || p.proj) * (site.showdown && i === 0 ? 1.5 : 1), 0);
   const T = S.lineupType || 'proj', gpp = isGpp(T);
   const lev = l => l.reduce((a, p, i) => a + buildScore(p, S.lineupSt || {}, T) * (site.showdown && i === 0 ? 1.5 : 1), 0);
-  const L = S.lineups.map((l, i) => ({ l, i, pts: pts(l), sal: sal(l), own: own(l), ceil: ceil(l), lev: gpp ? lev(l) : 0 }));
+  const L = S.lineups.map((l, i) => ({ l: swapOrder(l), i, pts: pts(l), sal: sal(l), own: own(l), ceil: ceil(l), lev: gpp ? lev(l) : 0 }));
   $('#luType').textContent = LT_LABEL[T] + (gpp ? ' GPP' : '');
   const top = Math.max(...L.map(x => x.pts)), avg = L.reduce((a, x) => a + x.pts, 0) / L.length;
   const uniqPlayers = new Set(S.lineups.flat().map(p => p.key)).size;
@@ -1529,7 +1579,7 @@ function renderResults() {
     $('#resBody').innerHTML = `<table class="lu"><thead><tr><th>#</th>${site.slotNames.map(s => `<th>${s}</th>`).join('')}<th class="n">Salary</th><th class="n">Proj</th><th class="n">Ceil</th><th class="n">Own%</th>${gpp ? '<th class="n">Leverage</th>' : ''}</tr></thead><tbody>` +
       L.map(x => `<tr><td class="rank">${String(x.i + 1).padStart(3, '0')}</td>${x.l.map((p, i) => {
         const c = site.showdown && i === 0;
-        return `<td class="slot"><span class="pl${c ? ' cpt' : ''}"><b>${esc(p.name)}</b><small>${esc(p.team)} · ${money(c ? p.cptSalary : p.salary)} · ${f1(p.proj * (c ? 1.5 : 1))}</small></span></td>`;
+        return `<td class="slot"><span class="pl${c ? ' cpt' : ''}"><b>${esc(p.name)}</b><small>${esc(p.team)}${tipOf(p) != null ? ' ' + fmtTip(tipOf(p)) : ''} · ${money(c ? p.cptSalary : p.salary)} · ${f1(p.proj * (c ? 1.5 : 1))}</small></span></td>`;
       }).join('')}<td class="n"><span class="cap" title="${money(site.cap - x.sal)} left"><span>${money(x.sal)}</span><i style="--w:${(x.sal / site.cap * 100).toFixed(1)}%"></i></span></td><td class="n"><b>${f1(x.pts)}</b></td><td class="n">${f1(x.ceil)}</td><td class="n">${f1(x.own)}</td>${gpp ? `<td class="n lev">${f1(x.lev)}</td>` : ''}</tr>`).join('') + '</tbody></table>';
   } else {
     const c = expCounts(); const N = S.lineups.length;
@@ -1537,13 +1587,15 @@ function renderResults() {
     $('#resBody').innerHTML = `<table><thead><tr><th>Player</th><th>Pos</th><th>Team</th><th class="n">Salary</th><th class="n">Proj</th><th class="n">Proj own%</th><th class="n">Lineups</th><th>Exposure</th></tr></thead><tbody>` +
       ps.map(p => { const e = c[p.key] / N * 100; return `<tr><td class="pname">${esc(p.name)}</td><td class="pos">${p.pos.join('/')}</td><td class="team">${esc(p.team)}</td><td class="n">${money(p.salary)}</td><td class="n">${f1(p.proj)}</td><td class="n">${f1(p.own)}</td><td class="n">${c[p.key]}</td><td><span class="exp" style="justify-content:flex-start"><i style="width:${Math.max(2, e * 1.2)}px"></i><span class="num">${Math.round(e)}%</span></span></td></tr>`; }).join('') + '</tbody></table>';
   }
-  $('#exportMeta').textContent = S.source === 'sample' ? 'Sample IDs are fictional. Import a real salary file to get an upload-ready CSV.' : `Upload format for ${site.label} using player IDs from ${S.fileName}.`;
+  const swapOn = settings().lateSwap !== false && site.slots && !site.showdown, timed = S.players.some(p => tipOf(p) != null);
+  const swapNote = !swapOn || !site.slots.some(x => x.length > 1) ? '' : timed ? ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F, the latest in UTIL.' : ' Add tip times (Vegas lines panel or a DraftKings salary file) to order slots for late swap.';
+  $('#exportMeta').textContent = (S.source === 'sample' ? 'Sample IDs are fictional. Import a real salary file to get an upload-ready CSV.' : `Upload format for ${site.label} using player IDs from ${S.fileName}.`) + swapNote;
 }
 
 function uploadCSV() {
   const site = SITES[S.site];
   const head = site.slotNames.join(',');
-  return head + '\n' + S.lineups.map(l => l.map((p, i) => site.showdown && i === 0 ? p.cptId : p.id).join(',')).join('\n') + '\n';
+  return head + '\n' + S.lineups.map(swapOrder).map(l => l.map((p, i) => site.showdown && i === 0 ? p.cptId : p.id).join(',')).join('\n') + '\n';
 }
 
 // ===== lineup types (Small / Large Field leverage, as in Gridlock) =====
@@ -2114,11 +2166,17 @@ $('#simBtn').addEventListener('click', () => runSim());
 $('#bestBtn').addEventListener('click', () => runSim('best'));
 $('#pullOdds').addEventListener('click', pullVegas);
 $('#lineType').addEventListener('change', syncLineType);
+$('#lateSwap').addEventListener('change', () => { save(); renderResults(); });
 ['ceilW', 'smallFade', 'largeFade', 'minProjG'].forEach(i => $('#' + i).addEventListener('input', syncLineType));
 try { const k = localStorage.getItem('swish:oddsKey'); if (k) $('#oddsKey').value = k; } catch (e) {}
 $('#vegasGames').addEventListener('change', e => {
   const i = e.target.closest('input[data-vf]'); if (!i) return; const tr = i.closest('.vrow'); const k = tr.dataset.vk, a = tr.dataset.a, b = tr.dataset.b;
   S.vegas = S.vegas || {}; const v = S.vegas[k] || { home: a, away: b, total: null, homeSpread: null, src: 'manual' };
+  if (i.dataset.vf === 'time') {
+    S.gameTimes = S.gameTimes || {};
+    if (!i.value) delete S.gameTimes[k]; else { const [h, m] = i.value.split(':').map(Number); const d = S.gameTimes[k] ? new Date(S.gameTimes[k]) : new Date(); d.setHours(h, m, 0, 0); S.gameTimes[k] = d.getTime(); }
+    save(); renderPool(); renderResults(); renderVegas(); return;
+  }
   const x = i.value === '' ? null : +i.value;
   if (i.dataset.vf === 'total') v.total = x; else v.homeSpread = x == null ? null : (v.home === a ? x : -x);
   v.src = 'manual'; S.vegas[k] = v; save(); renderPool(); renderVegas();
