@@ -474,7 +474,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v11</p>
+<p class="ver" id="ver">Swish v12</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1529,14 +1529,15 @@ function buildScore(p, st, type) {
   const own = type === 'large' && p.ownLarge != null ? p.ownLarge : (p.own || 0);
   return blended * Math.max(0.05, 1 - fade * own / 100);
 }
-const gppDefaults = (type, site) => isGpp(type) ? { maxExp: type === 'large' ? 30 : 40, minSal: Math.round(site.cap * 0.96 / 100) * 100 } : { maxExp: null, minSal: 0 };
+const DEFAULT_MAX_EXP = 75;
+const gppDefaults = (type, site) => isGpp(type) ? { maxExp: type === 'large' ? 30 : 40, minSal: Math.round(site.cap * 0.96 / 100) * 100 } : { maxExp: DEFAULT_MAX_EXP, minSal: 0 };
 function syncLineType() {
   const t = $('#lineType').value, site = SITES[S.site], d = gppDefaults(t, site);
   $('#gppBox').hidden = !isGpp(t); $('#smallFadeBox').hidden = t !== 'small'; $('#largeFadeBox').hidden = t !== 'large';
-  $('#lineTypeHint').textContent = t === 'proj' ? 'Highest projected points. Best for cash games and double-ups.'
-    : t === 'ceil' ? "Highest ceilings, using each player's upside number when your projections include one."
+  $('#lineTypeHint').textContent = t === 'proj' ? `Highest projected points. Best for cash games and double-ups. No player goes in more than ${d.maxExp}% of lineups unless you set your own max.`
+    : t === 'ceil' ? `Highest ceilings, using each player's upside number when your projections include one. No player goes in more than ${d.maxExp}% of lineups unless you set your own max.`
     : `Ranks players by upside discounted by ownership. Unless you set your own, max exposure defaults to ${d.maxExp}% and min salary to ${money(d.minSal)}.`;
-  $('#minSal').placeholder = isGpp(t) ? String(d.minSal) : 'none'; $('#globalMax').placeholder = isGpp(t) ? String(d.maxExp) : '100';
+  $('#minSal').placeholder = isGpp(t) ? String(d.minSal) : 'none'; $('#globalMax').placeholder = String(d.maxExp);
   [['ceilW', 'ceilWOut', '%'], ['smallFade', 'smallFadeOut', '%'], ['largeFade', 'largeFadeOut', '%'], ['minProjG', 'minProjGOut', ' pts']].forEach(([i, o, u]) => $('#' + o).textContent = $('#' + i).value + u);
 }
 
@@ -1831,7 +1832,7 @@ async function buildBestLineups({ site, st, pool, sim, opt, field, contests, ite
   const ranked = scr.map((r, i) => ({ r, i, sc: score(r) })).sort((a, b) => b.sc - a.sc);
   // greedy pick that respects min unique and max exposure from the Optimizer
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
-  const cap = p => { const mx = p.maxExp ?? st.globalMax; return mx != null && mx < 100 ? Math.max(1, Math.floor(mx / 100 * N + 1e-9)) : N; };
+  const cap = p => { const mx = p.maxExp ?? st.globalMax ?? DEFAULT_MAX_EXP; return mx != null && mx < 100 ? Math.max(1, Math.floor(mx / 100 * N + 1e-9)) : N; };
   const used = {}; const picked = []; let skipped = 0;
   for (const x of ranked) {
     if (picked.length >= N) break;
