@@ -481,7 +481,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v19</p>
+<p class="ver" id="ver">Swish v20</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1341,12 +1341,18 @@ function importProjections(text, fileName, quiet) {
     }
     return [];
   };
-  const matched = S.source === 'sample' ? 0 : T.filter(r => find(r).length).length;
+  // A file with its own salaries and site IDs is a slate by itself. Treat it as an update only
+  // when most of its IDs belong to the slate already loaded; name matches alone aren't enough,
+  // since the same players appear on many slates.
+  const withIds = T.filter(r => pickCol(r, P_ID) && numOf(pickCol(r, ['salary', 'sal', 'dk salary', 'fd salary'])));
+  const standalone = withIds.length >= T.length * 0.5;
+  const idMatched = withIds.filter(r => byId.has(String(pickCol(r, P_ID)))).length;
+  const matched = S.source === 'sample' || S.isBuiltin ? 0 : standalone ? (idMatched >= withIds.length * 0.8 ? T.length : 0) : T.filter(r => find(r).length).length;
   // Load as its own slate when nothing real is loaded yet or the file is for a different slate.
   if (matched < T.length * 0.5) {
     const sl = slateFromProjections(T, fileName);
     if (sl.players.length >= SITES[sl.site].size) {
-      S.site = sl.site; S.players = sl.players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null; S.gameTimes = {};
+      S.isBuiltin = false; S.site = sl.site; S.players = sl.players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null; S.gameTimes = {};
       save(); render();
       if (!quiet) notify('ok', `Loaded <b>${sl.players.length}</b> players from ${esc(fileName)} as a <b>${SITES[sl.site].label}</b> slate, with projections, ceilings, ownership and DraftKings IDs for upload.`);
       return;
@@ -1370,6 +1376,7 @@ function importProjections(text, fileName, quiet) {
   notify(hit ? 'ok' : 'err', `Matched <b>${hit}</b> projection rows from ${esc(fileName)}.` + (miss.length ? ` Not on this slate: ${esc(miss.slice(0, 8).join(', '))}${miss.length > 8 ? ` and ${miss.length - 8} more` : ''}.` : ''));
 }
 function loadSlate(site, players, fileName) {
+  S.isBuiltin = false;
   S.site = site; S.players = players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null;
   save(); render();
   const site_ = SITES[site];
@@ -1462,7 +1469,7 @@ const BUILTIN_CSV = `﻿"Player","Pos","Team","Opp","Salary","FPTS","Value","Cei
 "Tobias Harris","PF","SAS","OKC","$5,500","0.0","-28.0","0.0","0.0%","DK","MAIN","Default","44451265","Tobias Harris"
 "Tarris Reed Jr.","C","SAS","OKC","$3,000","0.0","-18.0","0.0","0.0%","DK","MAIN","Default","44451605","Tarris Reed Jr."
 "Maliq Brown","PF","SAS","OKC","$3,000","0.0","-18.0","0.0","0.0%","DK","MAIN","Default","44451532","Maliq Brown"`;
-function loadBuiltin() { importProjections(BUILTIN_CSV, BUILTIN_NAME, true); }
+function loadBuiltin() { importProjections(BUILTIN_CSV, BUILTIN_NAME, true); S.isBuiltin = true; save(); }
 function loadSample(site) {
   S.gameTimes = {};
   if (site === 'dk') { S.source = 'sample'; S.players = []; return loadBuiltin(); }
@@ -1473,7 +1480,7 @@ function readFile(file, fn) { const r = new FileReader(); r.onload = () => fn(St
 
 // ===== persistence (per-browser convenience) =====
 function save() {
-  store.set('slate', { site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null, gameTimes: S.gameTimes || {} });
+  store.set('slate', { isBuiltin: !!S.isBuiltin, site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null, gameTimes: S.gameTimes || {} });
   store.set('settings', settings());
 }
 function restore() {
@@ -1684,7 +1691,7 @@ async function build() {
 // ===== events =====
 $('#siteSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.site === S.site) return;
-  if (S.source === 'file' && S.fileName !== BUILTIN_NAME) notify('', `Your imported file is a <b>${SITES[S.site].label}</b> slate, so switching to <b>${SITES[b.dataset.site].label}</b> loads the sample slate. Import that contest's salary file to use real players.`);
+  if (S.source === 'file' && !S.isBuiltin) notify('', `Your imported file is a <b>${SITES[S.site].label}</b> slate, so switching to <b>${SITES[b.dataset.site].label}</b> loads the sample slate. Import that contest's salary file to use real players.`);
   if (b.dataset.site === 'dk') { loadSample('dk'); return; }
   loadSample(b.dataset.site);
 });
