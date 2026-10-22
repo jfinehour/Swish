@@ -19,5 +19,8 @@ It opens full screen, works offline, and saves your slate and settings on each d
 - **Sim-built lineups:** builds a pool of candidate lineups, runs them all through the selected contests, keeps the best by ROI, top-1% or cash rate (respecting your locks, exposure and min-unique settings), and re-scores the picks on fresh replays.
 - **Simulate:** replays the slate with correlated player outcomes, finds how often each player is in the optimal lineup, and runs your lineups through four preset DraftKings single-entry contests ($12 with 980 entries, $5 with 1,189 entries, $12 Pick and Roll with 490 entries, and the $3 Sharpshooter with 15,854 entries) plus an optional custom contest, against a field built from projected ownership, to estimate cash rate, top-1% rate and ROI for each.
 
+## Starting over
+Tap **New slate** in the header to clear the current players, edits, lineups, sim results and Vegas lines on that device. Settings, contest choices and your Odds API key stay.
+
 ## Updating
 Edit `index.html`, then bump the cache name in `sw.js` (for example `swish-v2` → `swish-v3`) so installed copies pick up the new version on next launch.

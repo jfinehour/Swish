@@ -303,6 +303,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   <div class="actions">
     <label class="btn" for="salFile">Import salaries</label><input type="file" id="salFile" accept=".csv,text/csv">
     <label class="btn" for="projFile">Import projections</label><input type="file" id="projFile" accept=".csv,text/csv">
+    <button class="btn" id="newSlate">New slate</button>
   </div>
 </header>
 
@@ -481,7 +482,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v20</p>
+<p class="ver" id="ver">Swish v21</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1488,6 +1489,7 @@ function restore() {
   if (st) for (const [k, v] of Object.entries(st)) { const el = document.getElementById(k); if (!el || v == null) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
   const s = store.get('slate');
   if (s && s.players && s.players.length && SITES[s.site]) { Object.assign(S, s, { gamesOff: new Set(s.gamesOff || []) }); }
+  else if (s && s.source === 'empty' && SITES[s.site]) { Object.assign(S, s, { players: [], gamesOff: new Set() }); }
   else { S.source = 'sample'; loadBuiltin(); }
 }
 function settings() {
@@ -1525,7 +1527,7 @@ function render() {
   document.querySelectorAll('#siteSeg button').forEach(b => b.setAttribute('aria-pressed', b.dataset.site === S.site));
   const games = [...new Set(S.players.map(p => p.game))];
   const live = S.players.filter(p => !S.gamesOff.has(p.game));
-  $('#slateInfo').textContent = `${games.length} game${games.length === 1 ? '' : 's'} · ${live.length} players${S.fileName ? ' · ' + S.fileName : ''}`;
+  $('#slateInfo').textContent = !S.players.length ? 'No slate loaded' : `${games.length} game${games.length === 1 ? '' : 's'} · ${live.length} players${S.fileName ? ' · ' + S.fileName : ''}`;
   $('#siteLabel').textContent = site.label;
   $('#uniq').max = site.size;
   $('#rules').innerHTML = `<div>Cap <b>${money(site.cap)}</b> · <b>${site.size}</b> players</div><div>Slots <b>${site.slotNames.join(' ')}</b></div>` +
@@ -1554,6 +1556,7 @@ function renderPool() {
   const lockN = S.players.filter(p => p.lock).length, exN = S.players.filter(p => p.excl).length;
   $('#poolMeta').textContent = `${rows.length} shown · ${lockN} locked · ${exN} excluded`;
   $('#pool thead').innerHTML = '<tr>' + COLS.map(c => `<th class="${c.n ? 'n ' : ''}${c.s ? 'sortable' : ''}" data-k="${c.k}"${S.sort.key === c.k ? ` data-dir="${dir > 0 ? '▲' : '▼'}"` : ''}>${c.t}</th>`).join('') + '</tr>';
+  if (!S.players.length) { $('#pool tbody').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No slate loaded. Use <b>Import salaries</b> or <b>Import projections</b> above, or drop a CSV anywhere on the page.</td></tr>`; return; }
   if (!rows.length) { $('#pool tbody').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No players match these filters.</td></tr>`; return; }
   const sdNote = S.site === 'sd';
   $('#pool tbody').innerHTML = rows.map(p => {
@@ -1646,6 +1649,7 @@ function syncLineType() {
 let building = false;
 async function build() {
   if (building) return;
+  if (!S.players.length) return notify('err', 'No slate loaded. Import a salary or projections file first.');
   const site = SITES[S.site]; const st = settings();
   const N = Math.max(1, Math.min(300, Math.round(st.nLineups || 1)));
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
@@ -1687,6 +1691,22 @@ async function build() {
   save(); renderPool(); renderResults();
   if (out.length) $('#results').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 }
+
+// ===== start over =====
+function clearSlate() {
+  Object.assign(S, { players: [], lineups: [], builtSite: null, sim: null, vegas: {}, gameTimes: {}, gamesOff: new Set(), fileName: '', source: 'empty', isBuiltin: false, whyOpen: null, lineupType: null });
+  save(); render();
+  notify('ok', 'Slate cleared. Your settings, contests and API key are still here. Import a salary or projections file to start.');
+}
+function askClearSlate() {
+  const box = $('#notices'); box.querySelector('.confirm')?.remove();
+  const el = document.createElement('div'); el.className = 'notice err confirm'; el.style.flexWrap = 'wrap';
+  el.innerHTML = `<div><b>Start a new slate?</b> This clears the players, your projection edits, locks and exposures, built lineups, simulation results, and Vegas lines on this device. Your settings, contest choices and Odds API key stay.</div>
+    <div class="actions" style="margin-left:auto;flex-wrap:nowrap"><button class="btn" data-a="no">Cancel</button><button class="btn primary" data-a="yes">Clear slate</button></div>`;
+  el.addEventListener('click', e => { const b = e.target.closest('[data-a]'); if (!b) return; el.remove(); if (b.dataset.a === 'yes') clearSlate(); });
+  box.prepend(el); scrollTo({ top: 0 });
+}
+$('#newSlate').addEventListener('click', askClearSlate);
 
 // ===== events =====
 $('#siteSeg').addEventListener('click', e => {
@@ -1877,6 +1897,7 @@ function simProgress(stage, f) { $('#simProg').style.width = Math.round(stage.fr
 
 async function runSim(mode) {
   if (simming || building) return;
+  if (!S.players.length) return notify('err', 'No slate loaded. Import a salary or projections file first.');
   const buildBest = mode === 'best';
   const site = SITES[S.site]; const st = settings();
   const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0), st);
