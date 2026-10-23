@@ -500,13 +500,14 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="foot" id="luFoot" hidden>
       <span class="meta" id="luExportMeta"></span>
       <button class="btn" id="luClear">Clear this set</button>
+      <button class="btn primary" id="luSimAll" hidden>Simulate all</button>
       <button class="btn" id="luCopy">Copy upload CSV</button>
       <button class="btn primary" id="luSave" hidden>Download upload CSV</button>
     </div>
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v26</p>
+<p class="ver" id="ver">Swish v27</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1802,6 +1803,8 @@ function bankSet(which) {
   const by = new Map(S.players.map(p => [p.key, p]));
   const take = (keys, stats) => (keys || []).map((ks, i) => ({ l: ks.map(k => by.get(k)), st: stats ? stats[i] : null, src: stats ? 'sim' : 'opt' })).filter(x => x.l.every(Boolean));
   if (which === 'opt') return take(B.opt);
+  if (which === 'all' && B.allStats) { const out = bankSet('allRaw'); out.forEach(x => { const st = B.allStats[x.l.map(p => p.key).sort().join(',')]; x.stAll = st || null; }); return out.sort((a, b) => (b.stAll ? b.stAll.roiCap : -1e9) - (a.stAll ? a.stAll.roiCap : -1e9)); }
+  if (which === 'allRaw') which = 'all';
   if (which === 'sim') return take(B.sim, B.simStats || []);
   const seen = new Set(), out = [];
   for (const x of take(B.opt).concat(take(B.sim, B.simStats || []))) { const g = x.l.map(p => p.key).sort().join(','); if (!seen.has(g)) { seen.add(g); out.push(x); } }
@@ -1830,20 +1833,30 @@ function renderLineupsView() {
   const sal = l => l.reduce((a, p, j) => a + (sd && j === 0 ? p.cptSalary : p.salary), 0);
   const proj = l => l.reduce((a, p, j) => a + p.proj * (sd && j === 0 ? 1.5 : 1), 0);
   const own = l => l.reduce((a, p) => a + (p.own || 0), 0);
+  const ALLRUN = LU_SET === 'all' && list.some(x => x.stAll);
+  if (ALLRUN) list.forEach(x => { x.st = x.stAll; });
   const withSim = list.some(x => x.st);
   const avg = f => list.reduce((a, x) => a + f(x), 0) / list.length;
   const simL = list.filter(x => x.st);
   stats.hidden = false;
   stats.innerHTML = [['Lineups', list.length], ['Avg proj', f1(avg(x => proj(x.l)))], ['Avg salary', money(avg(x => sal(x.l)))], ['Avg own', Math.round(avg(x => own(x.l))) + '%']]
-    .concat(simL.length ? [['Sim-built avg ROI', sgnPct(simL.reduce((a, x) => a + x.st.roi, 0) / simL.length)], ['Robust ROI', sgnPct(simL.reduce((a, x) => a + x.st.roiCap, 0) / simL.length)]] : [])
+    .concat(simL.length ? [[ALLRUN ? 'Avg ROI' : 'Sim-built avg ROI', sgnPct(simL.reduce((a, x) => a + x.st.roi, 0) / simL.length)], ['Robust ROI', sgnPct(simL.reduce((a, x) => a + x.st.roiCap, 0) / simL.length)]] : [])
     .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
   body.innerHTML = `<table class="simt"><thead><tr><th>#</th>${LU_SET === 'all' ? '<th>From</th>' : ''}<th>Lineup</th><th class="n">Salary</th><th class="n">Proj</th><th class="n">Own</th>${withSim ? '<th class="n">ROI</th><th class="n">Robust</th><th class="n">Cash</th><th class="n">Top 1%</th>' : ''}</tr></thead><tbody>` +
     list.map((x, i) => `<tr><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LU_SET === 'all' ? `<td class="pos">${x.src === 'sim' ? 'Sim-built' : 'Optimized'}</td>` : ''}<td class="lnames">${lineupNames(x.l)}</td><td class="n">${money(sal(x.l))}</td><td class="n">${f1(proj(x.l))}</td><td class="n">${f1(own(x.l))}%</td>${withSim ? (x.st ? `<td class="n">${roiCell(x.st.roi)}</td><td class="n">${sgnPct(x.st.roiCap)}</td><td class="n">${pctFmt(x.st.cash)}</td><td class="n">${pctFmt(x.st.top1)}</td>` : '<td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td>') : ''}</tr>`).join('') + '</tbody></table>';
   foot.hidden = false;
   $('#luClear').hidden = LU_SET === 'all';
-  $('#luExportMeta').textContent = `Exports these ${list.length} lineups in ${site.label} upload format${settings().lateSwap !== false && !sd ? ', slots ordered for late swap' : ''}.${withSim ? ' ROI figures come from the sim-built check (averaged across its contests).' : ''}`;
+  $('#luSimAll').hidden = LU_SET !== 'all';
+  if (LU_SET === 'all') $('#luMeta').textContent = ALLRUN ? `Simulated together ${when(B.allAt)} · ${(B.allContests || []).join(' + ')} · sorted by robust ROI` : 'Optimized and sim-built, duplicates removed';
+  $('#luExportMeta').textContent = `Exports these ${list.length} lineups in ${site.label} upload format${settings().lateSwap !== false && !sd ? ', slots ordered for late swap' : ''}.` + (ALLRUN ? ` Every lineup was scored on the same ${(B.allIters || 0).toLocaleString()} replays and field, averaged across contests, so the numbers compare directly. Full detail is under Your lineups on the Simulate tab.${list.some(x => !x.stAll) ? ' Lineups added since then show no numbers; press Simulate all again.' : ''}` : withSim ? (LU_SET === 'all' ? ' ROI figures for sim-built lineups come from their own check; press Simulate all to score every lineup on the same replays.' : ' ROI figures come from the sim-built check (averaged across its contests).') : (LU_SET === 'all' ? ' Press Simulate all to score every lineup on the same replays.' : ''));
 }
 const luFname = () => `${S.site === 'fd' ? 'fanduel' : S.site === 'sd' ? 'dk-showdown' : 'draftkings'}-nba-${LU_SET === 'sim' ? 'simbuilt' : LU_SET === 'opt' ? 'optimized' : 'all'}-lineups.csv`;
+$('#luSimAll').addEventListener('click', () => {
+  const list = bankSet('allRaw').map(x => x.l);
+  if (!list.length) return;
+  if (!selectedContests(settings()).length) return notify('err', 'Pick at least one contest on the Simulate tab first.');
+  runSim(null, list).then(() => renderLineupsView());
+});
 $('#luTabs').addEventListener('click', e => { const b = e.target.closest('[data-set]'); if (b) { LU_SET = b.dataset.set; renderLineupsView(); } });
 $('#luClear').addEventListener('click', () => {
   if (LU_SET === 'opt') Object.assign(S.bank, { opt: [], optAt: null }); else if (LU_SET === 'sim') Object.assign(S.bank, { sim: [], simStats: [], simAt: null });
@@ -2057,7 +2070,7 @@ function boomLine(p, cpt) { const x = S.site === 'fd' ? 5.5 : 6; return (cpt ? p
 let simming = false;
 function simProgress(stage, f) { $('#simProg').style.width = Math.round(stage.from + (stage.to - stage.from) * f) + '%'; }
 
-async function runSim(mode) {
+async function runSim(mode, lineupsOverride) {
   if (simming || building) return;
   if (!S.players.length) return notify('err', 'No slate loaded. Import a salary or projections file first.');
   const buildBest = mode === 'best';
@@ -2071,7 +2084,8 @@ async function runSim(mode) {
   simming = true; $('#simBtn').disabled = true; $('#bestBtn').disabled = true; (buildBest ? $('#bestBtn') : $('#simBtn')).textContent = 'Simulating…';
   const stg = buildBest ? { sim: [0, 8], opt: [8, 25], field: [25, 38], mine: [38, 45] } : { sim: [0, 15], opt: [15, 55], field: [55, 75], mine: [75, 100] };
   const prog = k => f => simProgress({ from: stg[k][0], to: stg[k][1] }, f);
-  const t0 = performance.now(); const msg = t => $('#simMsg').textContent = t;
+  const t0 = performance.now(); const msg = t => { $('#simMsg').textContent = t; if (lineupsOverride) $('#luExportMeta').textContent = t; };
+  if (lineupsOverride) { $('#luSimAll').disabled = true; $('#luSimAll').textContent = 'Simulating…'; }
   try {
     msg('Replaying the slate…');
     const simPool = truthPool(pool, (st.projConf ?? 30) / 100);
@@ -2087,7 +2101,7 @@ async function runSim(mode) {
     msg('Building the contest field…');
     const maxEntries = Math.max(...contests.map(c => c.entries));
     const field = await buildField(S.site, pool, { seed: runSeed % 100000 + 7, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: prog('field') });
-    const mineL = S.builtSite === S.site ? S.lineups : [];
+    const mineL = lineupsOverride || (S.builtSite === S.site ? S.lineups : []);
     let mine = [];
     if (mineL.length) {
       msg(`Running ${mineL.length} lineup${mineL.length === 1 ? '' : 's'} through ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
@@ -2113,6 +2127,12 @@ async function runSim(mode) {
     if (buildBest) built = await buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries });
     S.sim = { fieldInfo: { consensusShare: field.consensusShare, concentration: field.concentration }, conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
+    if (lineupsOverride && mine.length) {
+      const sig = l => l.map(p => p.key).sort().join(',');
+      const stats = {}; mine.forEach((r, i) => { stats[sig(mineL[i])] = { roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }; });
+      S.bank = Object.assign(S.bank || {}, bankBase(), { allStats: stats, allAt: Date.now(), allContests: contests.map(c => c.short), allIters: iters });
+      S.simTab = 'mine'; save();
+    }
     if (buildBest && built && built.lineups.length) {
       const per = built.mine.map(r => ({ roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }));
       S.bank = Object.assign(S.bank || {}, bankBase(), { sim: built.lineups.map(l => l.map(p => p.key)), simStats: per, simAt: Date.now(), simContests: contests.map(c => c.short) });
@@ -2122,9 +2142,10 @@ async function runSim(mode) {
     S.whyOpen = null;
     msg(`Done in ${S.sim.seconds.toFixed(1)}s.`);
   } catch (e) { notify('err', 'The simulation hit an error: ' + esc(e.message)); msg('Simulation stopped.'); }
+  if (lineupsOverride) { $('#luSimAll').disabled = false; $('#luSimAll').textContent = 'Simulate all'; }
   simming = false; $('#simBtn').disabled = false; $('#bestBtn').disabled = false; $('#simBtn').textContent = 'Run simulation'; $('#bestBtn').textContent = 'Build best simmed lineups'; $('#simProg').style.width = '100%';
   renderSim();
-  if (S.sim && matchMedia('(max-width: 980px)').matches) document.querySelector('section[aria-label="Simulation results"]').scrollIntoView({ block: 'start' });
+  if (!lineupsOverride && S.sim && matchMedia('(max-width: 980px)').matches) document.querySelector('section[aria-label="Simulation results"]').scrollIntoView({ block: 'start' });
 }
 
 // ----- projection confidence -----
