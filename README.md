@@ -14,6 +14,7 @@ It opens full screen, works offline, and saves your slate and settings on each d
 ## Using it
 - **Lineup types:** Projection (cash), Ceiling, Small Field GPP and Large Field GPP. GPP types rank players by a leverage score (ceiling blended with projection, discounted by ownership, with a heavier fade for large fields), cap exposure and require near-full salary by default.
 - **Late swap:** with tip times (from the Vegas line pull, or typed in), Classic lineups are slotted so the latest games sit in UTIL, later games in the other flex slots (G/F on DraftKings; G/F and F/C on FanDuel), and the earliest games in PG–C.
+- **Boosts:** a Boost % per player raises or lowers both his projection and ceiling in builds, sim-built candidates and the simulation (the opponent field never sees boosts).
 - **Optimizer:** import a projections CSV with salaries and player IDs (Name, Pos, Team, Salary, FPTS, Ceiling, ProjOwn, DKSlateID). Lock, exclude and set exposure per player, then build and export an upload-ready CSV.
 - **Vegas lines:** pull consensus spreads and totals from The Odds API (your own key, stored only on your device) or type them in. Optionally adjust projections to implied team totals; sims use totals for game-level swing and spreads for blowout risk.
 - **Sim-built lineups:** builds a pool of candidate lineups, runs them all through the selected contests, keeps the best by ROI, top-1% or cash rate (respecting your locks, exposure and min-unique settings), and re-scores the picks on fresh replays.

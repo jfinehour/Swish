@@ -264,6 +264,8 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .vrow input.n { width: 100%; background: var(--panel); border: 1px solid var(--line); }
 .vmsg.ok { color: var(--lock); }
 .vmsg.err { color: var(--excl); }
+.n.boost.up { color: var(--lock); font-weight: 600; }
+.n.boost.down { color: var(--excl); font-weight: 600; }
 .vadj { display: block; font-family: var(--f-data); font-size: 10.5px; color: var(--accent); }
 .drop { position: fixed; inset: 0; color: var(--ink); background: color-mix(in srgb, var(--bg) 85%, transparent); border: 3px dashed var(--accent); display: grid; place-items: center; z-index: 50; font-family: var(--f-display); font-size: 28px; text-transform: uppercase; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -504,7 +506,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v28</p>
+<p class="ver" id="ver">Swish v29</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1600,9 +1602,15 @@ function sampleBanner() {
 const COLS = [
   { k: 'tg', t: '' }, { k: 'name', t: 'Player', s: true }, { k: 'pos', t: 'Pos' }, { k: 'team', t: 'Team', s: true },
   { k: 'salary', t: 'Salary', s: true, n: 1 }, { k: 'proj', t: 'Proj', s: true, n: 1 }, { k: 'ceil', t: 'Ceil', s: true, n: 1 }, { k: 'val', t: 'Value', s: true, n: 1 },
-  { k: 'own', t: 'Own%', s: true, n: 1 }, { k: 'minExp', t: 'Min%', n: 1 }, { k: 'maxExp', t: 'Max%', n: 1 }, { k: 'exp', t: 'Exp', s: true, n: 1 },
+  { k: 'own', t: 'Own%', s: true, n: 1 }, { k: 'boost', t: 'Boost', s: true, n: 1 }, { k: 'minExp', t: 'Min%', n: 1 }, { k: 'maxExp', t: 'Max%', n: 1 }, { k: 'exp', t: 'Exp', s: true, n: 1 },
 ];
-const value = p => p.salary ? p.proj / (p.salary / 1000) : 0;
+// Player boost: scales a player's projection and ceiling by the same percentage everywhere they are
+// used (builds, sim-built candidates and the simulation itself). The field never sees boosts.
+const boostF = p => p.boost ? Math.max(0.1, 1 + p.boost / 100) : 1;
+function withBoosts(players) {
+  return players.map(p => { const f = boostF(p); return f === 1 ? p : { ...p, proj: +(p.proj * f).toFixed(2), ceil: p.ceil ? +(p.ceil * f).toFixed(2) : p.ceil, bf: f }; });
+}
+const value = p => p.salary ? p.proj * boostF(p) / (p.salary / 1000) : 0;
 function expCounts() { const c = {}; S.lineups.forEach(l => l.forEach(p => c[p.key] = (c[p.key] || 0) + 1)); return c; }
 
 function render() {
@@ -1651,10 +1659,11 @@ function renderPool() {
       <td class="pos">${p.pos.join('/')}</td>
       <td class="team">${esc(p.team)} <small>v ${esc(p.opp)}</small>${tipOf(p) != null ? ` <small>${fmtTip(tipOf(p))}</small>` : ''}${vm && vm[p.team] ? `<br><small>${f1(vm[p.team].implied)} implied</small>` : ''}</td>
       <td class="n">${money(p.salary)}${sdNote ? `<br><small class="pos">CPT ${money(p.cptSalary)}</small>` : ''}</td>
-      <td class="n"><input class="n${p.proj !== p.base ? ' edited' : ''}" data-f="proj" type="number" step="0.1" value="${p.proj}" aria-label="Projection for ${esc(p.name)}">${vw && vm && vm[p.team] && p.proj ? `<span class="vadj">Vegas ${f1(p.proj * vegasProjFactor(p.team, vm, vw))}</span>` : ''}</td>
-      <td class="n">${p.ceil ? f1(p.ceil) : '<span class="pos">–</span>'}</td>
+      <td class="n"><input class="n${p.proj !== p.base ? ' edited' : ''}" data-f="proj" type="number" step="0.1" value="${p.proj}" aria-label="Projection for ${esc(p.name)}">${(() => { const vf = vw && vm && vm[p.team] && p.proj ? vegasProjFactor(p.team, vm, vw) : 1, bf = boostF(p); return vf !== 1 || bf !== 1 ? `<span class="vadj">${bf !== 1 && vf !== 1 ? 'Vegas + boost' : bf !== 1 ? 'Boosted' : 'Vegas'} ${f1(p.proj * vf * bf)}</span>` : ''; })()}</td>
+      <td class="n">${p.ceil ? f1(p.ceil) + (boostF(p) !== 1 ? `<span class="vadj">Boosted ${f1(p.ceil * boostF(p))}</span>` : '') : '<span class="pos">–</span>'}</td>
       <td class="n ${v >= (S.site === 'fd' ? 5.2 : 5.6) ? 'val-hi' : ''}">${v.toFixed(2)}</td>
       <td class="n"><input class="n sm" data-f="own" type="number" step="0.5" min="0" value="${p.own}" aria-label="Ownership for ${esc(p.name)}"></td>
+      <td class="n"><input class="n sm boost${p.boost ? (p.boost > 0 ? ' up' : ' down') : ''}" data-f="boost" type="number" step="5" min="-90" max="200" value="${p.boost ?? ''}" placeholder="–" aria-label="Boost % for ${esc(p.name)}"></td>
       <td class="n"><input class="n sm" data-f="minExp" type="number" min="0" max="100" value="${p.minExp ?? ''}" placeholder="–" aria-label="Min exposure for ${esc(p.name)}"></td>
       <td class="n"><input class="n sm" data-f="maxExp" type="number" min="0" max="100" value="${p.maxExp ?? ''}" placeholder="–" aria-label="Max exposure for ${esc(p.name)}"></td>
       <td class="n">${e == null ? '<span class="pos">–</span>' : `<span class="exp"><i style="width:${Math.max(2, e * 0.4)}px"></i>${e}%</span>`}</td></tr>`;
@@ -1738,7 +1747,7 @@ async function build() {
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
   const type = st.lineType || 'proj', gd = gppDefaults(type, site);
   const minProjG = isGpp(type) ? (st.minProjG ?? 8) : 0;
-  const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && (p.proj > 0 || p.lock) && (p.lock || p.proj >= minProjG)), st);
+  const pool = withBoosts(withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && (p.proj > 0 || p.lock) && (p.lock || p.proj * boostF(p) >= minProjG)), st));
   const locks = S.players.filter(p => p.lock && !p.excl && !S.gamesOff.has(p.game)).map(p => p.key);
   const globalMax = st.globalMax ?? gd.maxExp, minSal = st.minSal ?? gd.minSal;
   if (locks.length > site.size) return notify('err', `You locked ${locks.length} players but a lineup holds ${site.size}.`);
@@ -1910,13 +1919,18 @@ $('#pool tbody').addEventListener('click', e => {
 $('#pool tbody').addEventListener('change', e => {
   const i = e.target.closest('input[data-f]'); if (!i) return;
   const p = S.players.find(x => x.key === i.closest('tr').dataset.key); const f = i.dataset.f;
+  if (f === 'boost') {
+    const b = i.value === '' ? null : Math.max(-90, Math.min(200, +i.value)); p.boost = b || null;
+    i.classList.toggle('up', p.boost > 0); i.classList.toggle('down', p.boost < 0);
+    save(); setTimeout(renderPool, 0); return;
+  }
   const v = i.value === '' ? null : Math.max(0, +i.value);
   if (f === 'proj') p.proj = v ?? 0; else if (f === 'own') p.own = v ?? 0; else p[f] = v == null ? null : Math.min(100, v);
   if (f === 'proj') i.classList.toggle('edited', p.proj !== p.base);
   save();
 });
 $('#clearLocks').addEventListener('click', () => { S.players.forEach(p => { p.lock = false; p.excl = false; p.minExp = null; p.maxExp = null; }); save(); render(); });
-$('#resetProj').addEventListener('click', () => { S.players.forEach(p => { p.proj = p.base; p.own = p.baseOwn ?? p.own; }); save(); render(); });
+$('#resetProj').addEventListener('click', () => { S.players.forEach(p => { p.proj = p.base; p.own = p.baseOwn ?? p.own; p.boost = null; }); save(); render(); });
 $('#rand').addEventListener('input', e => { $('#randOut').textContent = e.target.value + '%'; });
 document.querySelectorAll('.form input, .form select, .form textarea').forEach(el => el.addEventListener('change', save));
 $('#buildBtn').addEventListener('click', build);
@@ -2070,7 +2084,7 @@ function selectedContests(st) {
   out.forEach(c => { c.paid = c.payouts.reduce((a, r) => a + (r.end - r.start + 1), 0); c.pool = c.payouts.reduce((a, r) => a + r.pay * (r.end - r.start + 1), 0); });
   return out;
 }
-const slateSig = () => S.site + '|' + S.players.map(p => p.key + ':' + p.proj + ':' + (p.ceil || '') + ':' + p.own + ':' + (p.excl ? 1 : 0)).join(',') + '|' + [...S.gamesOff].join(',');
+const slateSig = () => S.site + '|' + S.players.map(p => p.key + ':' + p.proj + ':' + (p.boost || '') + ':' + (p.ceil || '') + ':' + p.own + ':' + (p.excl ? 1 : 0)).join(',') + '|' + [...S.gamesOff].join(',');
 const lastName = n => { const parts = String(n).split(' '); const suf = /^(jr\.?|sr\.?|ii|iii|iv)$/i; return parts.length > 1 && suf.test(parts[parts.length - 1]) ? parts[parts.length - 2] : parts[parts.length - 1]; };
 const pctFmt = x => x >= 10 ? Math.round(x) + '%' : x >= 1 ? x.toFixed(1) + '%' : x > 0 ? x.toFixed(2) + '%' : '0%';
 const roiCell = r => `<span class="${r >= 0 ? 'pos-val' : 'neg-val'}">${r >= 0 ? '+' : ''}${Math.round(r)}%</span>`;
@@ -2083,7 +2097,8 @@ async function runSim(mode, lineupsOverride) {
   if (!S.players.length) return notify('err', 'No slate loaded. Import a salary or projections file first.');
   const buildBest = mode === 'best';
   const site = SITES[S.site]; const st = settings();
-  const pool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0), st);
+  const fieldPool = withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0), st);
+  const pool = withBoosts(fieldPool);
   const vmap = st.simVegas ? vegasMap() : null;
   if (pool.length < site.size) return notify('err', 'Not enough players with projections to simulate.');
   const iters = +st.simIters || 1000;
@@ -2096,7 +2111,8 @@ async function runSim(mode, lineupsOverride) {
   if (lineupsOverride) { $('#luSimAll').disabled = true; $('#luSimAll').textContent = 'Simulating…'; }
   try {
     msg('Replaying the slate…');
-    const simPool = truthPool(pool, (st.projConf ?? 30) / 100);
+    // confidence pulls unboosted projections toward salary value; your boosts then apply in full
+    const simPool = truthPool(fieldPool, (st.projConf ?? 30) / 100).map(p => { const f = boostF(p); return f === 1 ? p : { ...p, proj: p.proj * f, ceil: p.ceil ? p.ceil * f : p.ceil }; });
     const runSeed = Math.floor(Math.random() * 1e9);
     const sim = await simulateScores(simPool, { iters, seed: runSeed, teamW: 0, gameW: (st.paceCorr ?? 10) / 100, usageW: (st.usageCorr ?? 35) / 100, vegas: vmap, onProgress: prog('sim') });
     let opt = null;
@@ -2108,7 +2124,7 @@ async function runSim(mode, lineupsOverride) {
     }
     msg('Building the contest field…');
     const maxEntries = Math.max(...contests.map(c => c.entries));
-    const field = await buildField(S.site, pool, { seed: runSeed % 100000 + 7, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: prog('field') });
+    const field = await buildField(S.site, fieldPool, { seed: runSeed % 100000 + 7, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: prog('field') });
     const mineL = lineupsOverride || (S.builtSite === S.site ? S.lineups : []);
     let mine = [];
     if (mineL.length) {
@@ -2132,7 +2148,7 @@ async function runSim(mode, lineupsOverride) {
         opt: optPct, cpt: cptPct, own: p.own || 0, field: field.realized[p.key] || 0, lev: optPct == null ? null : optPct - (p.own || 0) };
     });
     let built = null;
-    if (buildBest) built = await buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries });
+    if (buildBest) built = await buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries });
     S.sim = { fieldInfo: { consensusShare: field.consensusShare, concentration: field.concentration }, conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
     if (lineupsOverride && mine.length) {
@@ -2173,7 +2189,7 @@ function truthPool(pool, conf) {
 }
 
 // ----- sim-built lineups: candidates -> contest screen -> pick -> fresh re-score -----
-async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries }) {
+async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries }) {
   const sd = !!site.showdown;
   const sigOf = l => sd ? l[0].key + '|' + l.slice(1).map(p => p.key).sort().join(',') : l.map(p => p.key).sort().join(',');
   const C = Math.max(30, +st.candN || 300), N = Math.max(1, Math.min(150, Math.round(st.bestN || 20)));
@@ -2218,7 +2234,7 @@ async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, cont
   for (let pp = 1; pp < P; pp++) {
     msg(`Stage 1 of 3: preparing pass ${pp + 1} of ${P}…`);
     passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: 0, gameW: (st.paceCorr ?? 10) / 100, usageW: (st.usageCorr ?? 35) / 100, vegas: vmap }));
-    passFields.push(await buildField(S.site, pool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
+    passFields.push(await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
   }
   const evalMany = async (keys, from, to) => {
     let acc = null;
@@ -2307,7 +2323,7 @@ async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, cont
   // Stage 3: out-of-sample check on a separate fixed field and replays with 3x the runs; the
   // picks are then ordered by that check, since the search ranking carries its own luck.
   msg(`Stage 3 of 3: re-testing the ${picked.length} picks${mineNow.length ? ' and your lineups' : ''} on a fresh field and fresh replays…`);
-  const oosField = await buildField(S.site, pool, { seed: (runSeed % 100000) + 99, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: f => simProgress({ from: 88, to: 92 }, f) });
+  const oosField = await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 99, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: f => simProgress({ from: 88, to: 92 }, f) });
   const simC = await simulateScores(simPool, { iters: Math.min(4000, iters * 3), seed: runSeed + 202, teamW: 0, gameW: (st.paceCorr ?? 10) / 100, usageW: (st.usageCorr ?? 35) / 100, vegas: vmap });
   const both = await contestSimMulti(S.site, simC, keysOf(picked.map(x => x.l).concat(mineNow)), oosField, contests, f => simProgress({ from: 92, to: 100 }, f));
   let val = both.slice(0, picked.length); const mineVal = both.slice(picked.length);
