@@ -17,6 +17,7 @@ It opens full screen, works offline, and saves your slate and settings on each d
 - **Optimizer:** import a projections CSV with salaries and player IDs (Name, Pos, Team, Salary, FPTS, Ceiling, ProjOwn, DKSlateID). Lock, exclude and set exposure per player, then build and export an upload-ready CSV.
 - **Vegas lines:** pull consensus spreads and totals from The Odds API (your own key, stored only on your device) or type them in. Optionally adjust projections to implied team totals; sims use totals for game-level swing and spreads for blowout risk.
 - **Sim-built lineups:** builds a pool of candidate lineups, runs them all through the selected contests, keeps the best by ROI, top-1% or cash rate (respecting your locks, exposure and min-unique settings), and re-scores the picks on fresh replays.
+- **Lineups tab:** the latest optimized set and the latest sim-built set (with their sim ROI, robust ROI, cash and top-1% rates) sit side by side, saved on the device, and export separately or together.
 - **Simulate:** replays the slate with correlated player outcomes, finds how often each player is in the optimal lineup, and runs your lineups through four preset DraftKings single-entry contests ($12 with 980 entries, $5 with 1,189 entries, $12 Pick and Roll with 490 entries, and the $3 Sharpshooter with 15,854 entries) plus an optional custom contest, against a field built from projected ownership, to estimate cash rate, top-1% rate and ROI for each.
 
 ## Starting over

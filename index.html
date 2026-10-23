@@ -181,6 +181,7 @@ textarea.out { width: 100%; height: 120px; font-family: var(--f-data); font-size
 .views { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
 .views button { border: 0; background: none; padding: 8px 14px 10px; font-family: var(--f-display); font-size: 18px; font-weight: 700; font-style: italic; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
 .views button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.views button .ct2, .seg button .ct2 { font-family: var(--f-data); font-size: 11px; font-weight: 500; margin-left: 5px; opacity: .8; }
 .views button .tabmark { font-family: var(--f-data); font-style: normal; font-size: 12px; font-weight: 600; color: var(--accent); margin-left: 5px; }
 textarea.pay { width: 100%; min-height: 74px; resize: vertical; border: 1px solid var(--line); background: var(--sunk); border-radius: 6px; padding: 6px 9px; font-family: var(--f-data); font-size: 12px; color: var(--ink); }
 details.adv summary { cursor: pointer; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -195,6 +196,7 @@ details.adv .form { padding: 0; }
 .lu2 b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lu2 small { font-family: var(--f-data); font-size: 11px; color: var(--muted); }
 .lu2 .c i, .lu2 .c b { color: var(--accent); }
+@media (max-width: 560px) { .views { gap: 0; } .views button { font-size: 15px; padding: 8px 9px 10px; letter-spacing: .02em; } }
 @media (max-width: 560px) { .lnames { min-width: 240px; } .lu2 { grid-template-columns: minmax(0, 1fr); grid-auto-flow: row; grid-template-rows: none !important; } }
 .flabel { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .contests { display: grid; gap: 6px; }
@@ -311,6 +313,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 <nav class="views" aria-label="Sections">
   <button data-view="opt" aria-pressed="true">Optimizer</button>
   <button data-view="sim" aria-pressed="false">Simulate<span class="tabmark" id="simCt" hidden title="Simulation results are ready"></span></button>
+  <button data-view="lu" aria-pressed="false">Lineups<span class="tabmark" id="luCt" hidden></span></button>
 </nav>
 <div id="optView">
 <div class="app">
@@ -483,7 +486,27 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v24</p>
+<div id="luView" hidden>
+  <section class="panel" aria-label="Saved lineups">
+    <div class="panel-h"><h2>Lineups</h2><span class="meta" id="luMeta"></span>
+      <div class="seg" role="tablist" id="luTabs" style="margin-left:auto">
+        <button data-set="opt" aria-pressed="true">Optimized<span class="ct2" id="luNopt"></span></button>
+        <button data-set="sim" aria-pressed="false">Sim-built<span class="ct2" id="luNsim"></span></button>
+        <button data-set="all" aria-pressed="false">All<span class="ct2" id="luNall"></span></button>
+      </div>
+    </div>
+    <div class="stats" id="luStats" hidden></div>
+    <div class="scroll" id="luBody"></div>
+    <div class="foot" id="luFoot" hidden>
+      <span class="meta" id="luExportMeta"></span>
+      <button class="btn" id="luClear">Clear this set</button>
+      <button class="btn" id="luCopy">Copy upload CSV</button>
+      <button class="btn primary" id="luSave" hidden>Download upload CSV</button>
+    </div>
+    <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
+  </section>
+</div>
+<p class="ver" id="ver">Swish v25</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1528,10 +1551,12 @@ function readFile(file, fn) { const r = new FileReader(); r.onload = () => fn(St
 
 // ===== persistence (per-browser convenience) =====
 function save() {
+  store.set('bank', S.bank || {});
   store.set('slate', { isBuiltin: !!S.isBuiltin, site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null, gameTimes: S.gameTimes || {} });
   store.set('settings', settings());
 }
 function restore() {
+  S.bank = store.get('bank') || {};
   const st = store.get('settings');
   if (st) for (const [k, v] of Object.entries(st)) { const el = document.getElementById(k); if (!el || v == null) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
   const s = store.get('slate');
@@ -1660,10 +1685,10 @@ function renderResults() {
   $('#exportMeta').textContent = (S.source === 'sample' ? 'Sample IDs are fictional. Import your projections to get an upload-ready CSV.' : `Upload format for ${site.label} using player IDs from ${S.fileName}.`) + swapNote;
 }
 
-function uploadCSV() {
+function uploadCSV(list) {
   const site = SITES[S.site];
   const head = site.slotNames.join(',');
-  return head + '\n' + S.lineups.map(swapOrder).map(l => l.map((p, i) => site.showdown && i === 0 ? p.cptId : p.id).join(',')).join('\n') + '\n';
+  return head + '\n' + (list || S.lineups).map(swapOrder).map(l => l.map((p, i) => site.showdown && i === 0 ? p.cptId : p.id).join(',')).join('\n') + '\n';
 }
 
 // ===== lineup types (Small / Large Field leverage, as in Gridlock) =====
@@ -1731,16 +1756,18 @@ async function build() {
     }
   } catch (e) { err = 'The optimizer hit an error: ' + e.message; }
   building = false; $('#buildBtn').disabled = false; $('#buildBtn').textContent = 'Build lineups';
+  if (out.length) S.bank = Object.assign(S.bank || {}, bankBase(), { opt: out.map(l => l.map(p => p.key)), optType: type, optAt: Date.now() });
   S.lineups = out; S.builtSite = S.site; S.lineupType = type; S.lineupSt = { ceilW: st.ceilW, smallFade: st.smallFade, largeFade: st.largeFade }; S.tab = S.tab || 'lineups'; if (S.sim) S.sim.mineStale = true;
   $('#buildMsg').textContent = out.length ? `Built ${out.length} lineup${out.length === 1 ? '' : 's'} in ${((performance.now() - t0) / 1000).toFixed(2)}s.` : 'No lineups built.';
   if (err) notify('err', esc(err));
   $('#outwrap').hidden = true;
-  save(); renderPool(); renderResults();
+  save(); renderPool(); renderResults(); renderLineupsView();
   if (out.length) $('#results').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 }
 
 // ===== start over =====
 function clearSlate() {
+  S.bank = {};
   Object.assign(S, { players: [], lineups: [], builtSite: null, sim: null, vegas: {}, gameTimes: {}, gamesOff: new Set(), fileName: '', source: 'empty', isBuiltin: false, whyOpen: null, lineupType: null });
   save(); render();
   notify('ok', 'Slate cleared. Your settings, contests and API key are still here. Import a salary or projections file to start.');
@@ -1754,6 +1781,86 @@ function askClearSlate() {
   box.prepend(el); scrollTo({ top: 0 });
 }
 $('#newSlate').addEventListener('click', askClearSlate);
+
+// ===== Lineups tab: the latest optimized and sim-built sets, kept on this device =====
+const bankBase = () => ({ site: S.site, file: S.fileName || '' });
+function bankSet(which) {
+  const B = S.bank || {}; if (B.site !== S.site || (B.file || '') !== (S.fileName || '')) return [];
+  const by = new Map(S.players.map(p => [p.key, p]));
+  const take = (keys, stats) => (keys || []).map((ks, i) => ({ l: ks.map(k => by.get(k)), st: stats ? stats[i] : null, src: stats ? 'sim' : 'opt' })).filter(x => x.l.every(Boolean));
+  if (which === 'opt') return take(B.opt);
+  if (which === 'sim') return take(B.sim, B.simStats || []);
+  const seen = new Set(), out = [];
+  for (const x of take(B.opt).concat(take(B.sim, B.simStats || []))) { const g = x.l.map(p => p.key).sort().join(','); if (!seen.has(g)) { seen.add(g); out.push(x); } }
+  return out;
+}
+let LU_SET = 'opt';
+function renderLineupsView() {
+  if (!$('#luBody')) return;
+  const site = SITES[S.site], B = S.bank || {};
+  const nO = bankSet('opt').length, nS = bankSet('sim').length, nA = bankSet('all').length;
+  $('#luNopt').textContent = nO || ''; $('#luNsim').textContent = nS || ''; $('#luNall').textContent = nA || '';
+  $('#luCt').textContent = nA ? String(nA) : ''; $('#luCt').hidden = !nA;
+  if (S.mainView !== 'lu') return;
+  document.querySelectorAll('#luTabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.set === LU_SET));
+  const list = bankSet(LU_SET);
+  const when = t => t ? new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  $('#luMeta').textContent = LU_SET === 'opt' ? (nO ? `Built ${when(B.optAt)} · ${LT_LABEL[B.optType] || 'Projection'}` : '') : LU_SET === 'sim' ? (nS ? `Sim-built ${when(B.simAt)} · ${(B.simContests || []).join(' + ')}` : '') : (nA ? 'Optimized and sim-built, duplicates removed' : '');
+  const stats = $('#luStats'), foot = $('#luFoot'), body = $('#luBody');
+  $('#luOutwrap').hidden = true;
+  if (!list.length) {
+    stats.hidden = true; foot.hidden = true;
+    body.innerHTML = `<div class="empty">${LU_SET === 'sim' ? 'No sim-built lineups yet. Run <b>Build best simmed lineups</b> on the Simulate tab and they will appear here.' : LU_SET === 'opt' ? 'No optimized lineups yet. Use <b>Build lineups</b> on the Optimizer tab and they will appear here.' : 'No lineups yet. Build lineups on the Optimizer tab or sim-built lineups on the Simulate tab.'}</div>`;
+    return;
+  }
+  const sd = !!site.showdown;
+  const sal = l => l.reduce((a, p, j) => a + (sd && j === 0 ? p.cptSalary : p.salary), 0);
+  const proj = l => l.reduce((a, p, j) => a + p.proj * (sd && j === 0 ? 1.5 : 1), 0);
+  const own = l => l.reduce((a, p) => a + (p.own || 0), 0);
+  const withSim = list.some(x => x.st);
+  const avg = f => list.reduce((a, x) => a + f(x), 0) / list.length;
+  const simL = list.filter(x => x.st);
+  stats.hidden = false;
+  stats.innerHTML = [['Lineups', list.length], ['Avg proj', f1(avg(x => proj(x.l)))], ['Avg salary', money(avg(x => sal(x.l)))], ['Avg own', Math.round(avg(x => own(x.l))) + '%']]
+    .concat(simL.length ? [['Sim-built avg ROI', sgnPct(simL.reduce((a, x) => a + x.st.roi, 0) / simL.length)], ['Robust ROI', sgnPct(simL.reduce((a, x) => a + x.st.roiCap, 0) / simL.length)]] : [])
+    .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
+  body.innerHTML = `<table class="simt"><thead><tr><th>#</th>${LU_SET === 'all' ? '<th>From</th>' : ''}<th>Lineup</th><th class="n">Salary</th><th class="n">Proj</th><th class="n">Own</th>${withSim ? '<th class="n">ROI</th><th class="n">Robust</th><th class="n">Cash</th><th class="n">Top 1%</th>' : ''}</tr></thead><tbody>` +
+    list.map((x, i) => `<tr><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LU_SET === 'all' ? `<td class="pos">${x.src === 'sim' ? 'Sim-built' : 'Optimized'}</td>` : ''}<td class="lnames">${lineupNames(x.l)}</td><td class="n">${money(sal(x.l))}</td><td class="n">${f1(proj(x.l))}</td><td class="n">${f1(own(x.l))}%</td>${withSim ? (x.st ? `<td class="n">${roiCell(x.st.roi)}</td><td class="n">${sgnPct(x.st.roiCap)}</td><td class="n">${pctFmt(x.st.cash)}</td><td class="n">${pctFmt(x.st.top1)}</td>` : '<td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td>') : ''}</tr>`).join('') + '</tbody></table>';
+  foot.hidden = false;
+  $('#luClear').hidden = LU_SET === 'all';
+  $('#luExportMeta').textContent = `Exports these ${list.length} lineups in ${site.label} upload format${settings().lateSwap !== false && !sd ? ', slots ordered for late swap' : ''}.${withSim ? ' ROI figures come from the sim-built check (averaged across its contests).' : ''}`;
+}
+const luFname = () => `${S.site === 'fd' ? 'fanduel' : S.site === 'sd' ? 'dk-showdown' : 'draftkings'}-nba-${LU_SET === 'sim' ? 'simbuilt' : LU_SET === 'opt' ? 'optimized' : 'all'}-lineups.csv`;
+$('#luTabs').addEventListener('click', e => { const b = e.target.closest('[data-set]'); if (b) { LU_SET = b.dataset.set; renderLineupsView(); } });
+$('#luClear').addEventListener('click', () => {
+  if (LU_SET === 'opt') Object.assign(S.bank, { opt: [], optAt: null }); else if (LU_SET === 'sim') Object.assign(S.bank, { sim: [], simStats: [], simAt: null });
+  save(); renderLineupsView();
+});
+$('#luCopy').addEventListener('click', () => {
+  const csv = uploadCSV(bankSet(LU_SET).map(x => x.l)); const ta = $('#luOutText'); ta.value = csv;
+  const fallback = () => { $('#luOutwrap').hidden = false; ta.focus(); ta.select(); $('#luExportMeta').textContent = 'Clipboard unavailable here. The CSV is selected below; copy it with your keyboard.'; };
+  try { navigator.clipboard.writeText(csv).then(() => { $('#luExportMeta').textContent = `Copied ${bankSet(LU_SET).length} lineups. Paste into a .csv file and upload it.`; }, fallback); } catch (e) { fallback(); }
+});
+(async () => {
+  try {
+    const btn = $('#luSave');
+    if (!window.claude) {
+      btn.hidden = false;
+      btn.addEventListener('click', () => {
+        const url = URL.createObjectURL(new Blob([uploadCSV(bankSet(LU_SET).map(x => x.l))], { type: 'text/csv' }));
+        const a = document.createElement('a'); a.href = url; a.download = luFname(); document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000); $('#luExportMeta').textContent = `Saved ${luFname()}.`;
+      });
+      return;
+    }
+    const dl = await window.claude?.use?.('downloads'); if (!dl) return;
+    btn.hidden = false;
+    btn.addEventListener('click', async () => {
+      try { await dl.save({ filename: luFname(), data: uploadCSV(bankSet(LU_SET).map(x => x.l)) }); $('#luExportMeta').textContent = `Saved ${luFname()}.`; }
+      catch (e) { if (e && e.code === 'declined') return; $('#luExportMeta').textContent = 'Download unavailable here. Use Copy upload CSV instead.'; }
+    });
+  } catch (e) {}
+})();
 
 // ===== events =====
 $('#siteSeg').addEventListener('click', e => {
@@ -1993,6 +2100,11 @@ async function runSim(mode) {
     if (buildBest) built = await buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries });
     S.sim = { fieldInfo: { consensusShare: field.consensusShare, concentration: field.concentration }, conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
+    if (buildBest && built && built.lineups.length) {
+      const per = built.mine.map(r => ({ roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }));
+      S.bank = Object.assign(S.bank || {}, bankBase(), { sim: built.lineups.map(l => l.map(p => p.key)), simStats: per, simAt: Date.now(), simContests: contests.map(c => c.short) });
+      save();
+    }
     if (buildBest) S.simTab = 'built'; else if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
     S.whyOpen = null;
     msg(`Done in ${S.sim.seconds.toFixed(1)}s.`);
@@ -2257,7 +2369,8 @@ const th = (k, t, sort, n = true) => `<th class="sortable${n ? ' n' : ''}" data-
 function renderSim() {
   const site = SITES[S.site]; const R = S.sim;
   document.querySelectorAll('.views button').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === S.mainView));
-  $('#optView').hidden = S.mainView !== 'opt'; $('#simView').hidden = S.mainView !== 'sim';
+  $('#optView').hidden = S.mainView !== 'opt'; $('#simView').hidden = S.mainView !== 'sim'; $('#luView').hidden = S.mainView !== 'lu';
+  renderLineupsView();
   $('#simSiteLabel').textContent = site.label;
   if ($('#presetCts').dataset.site !== S.site) { renderContestList(); $('#presetCts').dataset.site = S.site; }
   { const done = !!(R && R.site === S.site); $('#simCt').textContent = done ? '✓' : ''; $('#simCt').hidden = !done; }
