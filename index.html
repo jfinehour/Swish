@@ -473,6 +473,8 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <div class="field"><label for="bestN">Lineups to keep</label><input type="number" id="bestN" min="1" max="150" value="20"></div>
           <div class="field"><label for="candN">Candidates</label><select id="candN" class="sel"><option value="150">150 (fast)</option><option value="300" selected>300</option><option value="600">600 (slow)</option></select></div>
         </div>
+        <div class="field"><label for="passes">Stability</label><select id="passes" class="sel"><option value="1" selected>1 pass (fastest)</option><option value="3">3 passes (about 2x slower)</option><option value="5">5 passes (about 3x slower)</option></select>
+          <span class="hint">Each extra pass scores candidates against another opponent field and another set of replays, then averages, so picks change less between runs.</span></div>
         <div class="field"><label for="rankBy">Pick by</label><select id="rankBy" class="sel"><option value="blend">Balanced: cash rate + robust ROI</option><option value="roi">Robust ROI</option><option value="cash">Cash rate</option><option value="top1">Top 1% rate</option></select></div>
         <span class="hint" style="font-size:12px;color:var(--muted)">Follows your Optimizer locks, excludes, max per team, min salary, min unique and max exposure.</span>
       </div>
@@ -481,7 +483,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v23</p>
+<p class="ver" id="ver">Swish v24</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -783,21 +785,36 @@ async function simOptimals(siteKey, rows, sim, { locks = [], maxTeam = 0, maxIte
 // ----- Synthetic contest field -----
 // Opponents are drawn player by player in proportion to (calibrated) ownership,
 // kept roster-legal, and required to spend close to the cap like real entrants.
-async function buildField(siteKey, players, { draws = 3000, seed = 7, minSpendFrac = 0.965, calibrate = true, sharpShare = 0.35, sharpCount = 300, sharpRand = 25, onProgress } = {}) {
+// Opponent field, built the way Gridlock builds it, in three layers:
+//  - casual entrants: drawn player by player in proportion to (calibrated) ownership, roster-legal and
+//    near the cap; 30% of them are "herd" entrants who lean extra hard on chalk (weights ^2.5). One draw
+//    per real casual entrant (3,000 to 6,000 for speed), so rosters that repeat keep their true duplicate mass;
+//    one-off rosters are thinned and up-weighted to fit the sample budget.
+//  - optimizer users: leverage builds (projection discounted by 40% of ownership), 60% exposure cap.
+//  - consensus: the most obvious good-and-popular lineups (projection x (1 + ownership)), 15% of the
+//    field with geometric decay, scaled up on chalky slates where real fields duplicate more.
+// Ownership uses a separate Large Field column when the projections file has one.
+async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpendFrac = 0.965, calibrate = true, sharpShare = 0.35, consensusShare = 0.15, consensusCount = 8, herdShare = 0.3, herdExp = 2.5, sampleFrac = 0.35, sharpCount = 250, sharpRand = 18, onProgress } = {}) {
   const site = SITES[siteKey];
-  const rng = mulberry32(seed);
+  const rng = mulberry32((seed * 7919 + 13) >>> 0);
   const pool = players.filter(p => p.proj > 0);
+  const ownOf = p => p.ownLarge != null ? p.ownLarge : (p.own || 0);
   const hall = site.showdown ? [] : hallConstraints(site);
   const masks = pool.map(p => posMask(p.pos));
   const cheapest = Math.min(...pool.map(p => p.salary));
   const minSpend = site.cap * minSpendFrac;
-  const baseW = pool.map(p => Math.max(0.05, p.own || 0.3));
-  let w = baseW.slice();
+  let w = pool.map(p => Math.max(0.05, ownOf(p) || 0.3));
+  // slate chalk concentration (ownership-weighted mean ownership); typical ~13
+  let cO = 0, cS = 0; for (const p of pool) { const o = ownOf(p); if (o > 0) { cO += o * o; cS += o; } }
+  const concentration = cS > 0 ? cO / cS : 13;
+  const chalkScale = site.showdown ? 1 : Math.min(3, Math.max(0.5, Math.pow(concentration / 13, 2)));
+  consensusShare = Math.min(0.45, consensusShare * Math.sqrt(chalkScale));
+  consensusCount = Math.round(consensusCount * Math.max(1, chalkScale));
 
   const hallBits = pool.map((p, i) => { let b = 0; hall.forEach((h, k) => { if (masks[i] & h.mask) b |= 1 << k; }); return b; });
-  const salDesc = pool.map(p => site.showdown ? p.salary : p.salary).sort((a, b) => b - a);
+  const salDesc = pool.map(p => p.salary).sort((a, b) => b - a);
   const topSal = [0]; for (let k = 0; k < site.size; k++) topSal.push(topSal[k] + (salDesc[k] || 0));
-  function one() {
+  function one(wt) {
     const used = new Set(), team = {}, cnt = new Int16Array(hall.length), picks = [];
     let sal = 0;
     const K = site.size;
@@ -805,7 +822,6 @@ async function buildField(siteKey, players, { draws = 3000, seed = 7, minSpendFr
       const left = K - slot - 1;
       const cpt = site.showdown && slot === 0;
       let tot = 0; const cand = [];
-      // constraints that this pick must help satisfy (one short with no slack left)
       let tight = 0; for (let h = 0; h < hall.length; h++) if (cnt[h] + left === hall[h].need - 1) tight |= 1 << h;
       for (let i = 0; i < pool.length; i++) {
         if (used.has(i)) continue;
@@ -814,59 +830,82 @@ async function buildField(siteKey, players, { draws = 3000, seed = 7, minSpendFr
         if (sal + s + topSal[left] < minSpend) continue;
         if ((team[p.team] || 0) >= site.maxTeam) continue;
         if (tight && (hallBits[i] & tight) !== tight) continue;
-        cand.push(i); tot += w[i];
+        cand.push(i); tot += wt[i];
       }
       if (!cand.length) return null;
       let r = rng() * tot, pick = cand[cand.length - 1];
-      for (const i of cand) { r -= w[i]; if (r <= 0) { pick = i; break; } }
+      for (const i of cand) { r -= wt[i]; if (r <= 0) { pick = i; break; } }
       const p = pool[pick];
       used.add(pick); picks.push(pick); sal += cpt ? p.cptSalary : p.salary; team[p.team] = (team[p.team] || 0) + 1;
       for (let h = 0; h < hall.length; h++) if (masks[pick] & hall[h].mask) cnt[h]++;
     }
     if (sal < minSpend) return null;
-    const teams = Object.keys(team).length; if (teams < site.minTeams) return null;
+    if (Object.keys(team).length < site.minTeams) return null;
     if (site.minGames > 1 && new Set(picks.map(i => pool[i].game)).size < site.minGames) return null;
     return picks;
   }
+  let wHerd = w.map(x => Math.pow(x, herdExp));
   function sample(n) {
     const out = []; let tries = 0;
-    while (out.length < n && tries < n * 60) { tries++; const a = one(); if (a) out.push(a); }
+    while (out.length < n && tries < n * 60) { tries++; const a = one(rng() < herdShare ? wHerd : w); if (a) out.push(a); }
     return out;
   }
   if (calibrate) {
     for (let round = 0; round < 5; round++) {
-      const s = sample(1200); if (!s.length) break;
-      const c = new Float64Array(pool.length); s.forEach(a => a.forEach(i => c[i]++));
+      const sm = sample(1200); if (!sm.length) break;
+      const c = new Float64Array(pool.length); sm.forEach(a => a.forEach(i => c[i]++));
       for (let i = 0; i < pool.length; i++) {
-        const target = (pool[i].own || 0) / 100; if (target < 0.0005) continue;
-        const real = Math.max(0.0015, c[i] / s.length);
+        const target = ownOf(pool[i]) / 100; if (target < 0.0005) continue;
+        const real = Math.max(0.0015, c[i] / sm.length);
         w[i] *= Math.min(2, Math.max(0.5, Math.pow(target / real, 0.7)));
       }
+      wHerd = w.map(x => Math.pow(x, herdExp));
     }
   }
+  // casual layer: one draw per real casual entrant (3,000 to 6,000), duplicates at true mass
+  const others = Math.max(1, entries - 1);
+  const draws = Math.round(Math.min(6000, Math.max(3000, others * (1 - consensusShare) * (1 - sharpShare))));
   const raw = sample(draws);
+  if (!raw.length) throw new Error('Could not build an opponent field from this player pool. Check that it has ownership numbers.');
   const bySig = new Map();
   for (const a of raw) {
     const sig = site.showdown ? a[0] + '|' + a.slice(1).sort((x, y) => x - y).join(',') : a.slice().sort((x, y) => x - y).join(',');
     const e = bySig.get(sig); if (e) e.count++; else bySig.set(sig, { picks: a, count: 1 });
   }
-  const casual = [...bySig.values()].map(e => ({ keys: e.picks.map(i => pool[i].key), w: (1 - sharpShare) * e.count / raw.length, kind: 'casual' }));
-  // Sharper entrants: optimizer-built lineups with heavy randomness, as real multi-entry players use.
+  onProgress && onProgress(0.4); await tick();
+  const sampleSize = Math.max(Math.min(1000, entries), Math.min(Math.min(entries, 6000), Math.round(entries * sampleFrac)));
+  const budget = Math.max(200, Math.round(sampleSize * (1 - sharpShare)));
+  const all = [...bySig.values()], duped = all.filter(x => x.count >= 2).sort((x, y) => y.count - x.count).slice(0, budget);
+  const singles = all.filter(x => x.count === 1);
+  for (let i = singles.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [singles[i], singles[j]] = [singles[j], singles[i]]; }
+  const kept = singles.slice(0, Math.max(0, budget - duped.length));
+  const dupMass = duped.reduce((t, x) => t + x.count, 0), singleMass = raw.length - dupMass;
+  const naiveShare = (1 - consensusShare) * (1 - sharpShare), sharpW0 = (1 - consensusShare) * sharpShare;
+  const lineups = duped.map(x => ({ keys: x.picks.map(i => pool[i].key), w: naiveShare * x.count / raw.length, kind: 'casual' }))
+    .concat(kept.map(x => ({ keys: x.picks.map(i => pool[i].key), w: kept.length ? naiveShare * singleMass / raw.length / kept.length : 0, kind: 'casual' })));
+  const rowsFor = f => { const rows = []; for (const p of pool) { const r = Object.assign({}, p, { proj: f(p) }); if (site.showdown) rows.push(Object.assign({}, r, { cpt: true, salary: p.cptSalary })); rows.push(Object.assign({}, r, { cpt: false })); } return rows; };
+  // optimizer users: leverage builds with a 60% exposure cap
   const sharp = [];
   if (sharpShare > 0) {
-    const rows = [];
-    for (const p of pool) { if (site.showdown) rows.push(Object.assign({}, p, { cpt: true, salary: p.cptSalary })); rows.push(Object.assign({}, p, { cpt: false })); }
+    const n = Math.min(sharpCount, Math.max(60, Math.round(sampleSize * sharpShare)));
+    const maxExp = {}; pool.forEach(p => maxExp[p.key] = 60);
     let last = performance.now();
-    for (const r of generate(siteKey, rows, { lineups: sharpCount, uniq: 1, rand: sharpRand, locks: [], excl: [], minExp: {}, maxExp: {}, nodeLimit: 2e5, rng: mulberry32((seed * 5 + 1) >>> 0) })) {
+    for (const r of generate(siteKey, rowsFor(p => p.proj * (1 - 0.4 * ownOf(p) / 100)), { lineups: n, uniq: 1, rand: sharpRand, locks: [], excl: [], minExp: {}, maxExp, nodeLimit: 2e5, rng: mulberry32((seed * 5 + 1) >>> 0) })) {
       if (r.error) break; sharp.push(r.lineup.map(p => p.key));
-      if (performance.now() - last > 40) { onProgress && onProgress(sharp.length / sharpCount); await tick(); last = performance.now(); }
+      if (performance.now() - last > 40) { onProgress && onProgress(0.4 + 0.5 * sharp.length / n); await tick(); last = performance.now(); }
     }
   }
-  const sharpW = sharp.length ? sharpShare / sharp.length : 0;
-  const lineups = casual.concat(sharp.map(keys => ({ keys, w: sharpW, kind: 'sharp' })));
-  if (!sharp.length) lineups.forEach(l => l.w /= (1 - sharpShare));
+  sharp.forEach(keys => lineups.push({ keys, w: sharpW0 / sharp.length, kind: 'sharp' }));
+  // consensus: the obvious good-and-popular builds, geometric decay
+  const cons = [];
+  if (consensusShare > 0) for (const r of generate(siteKey, rowsFor(p => p.proj * (1 + ownOf(p) / 100)), { lineups: consensusCount, uniq: 1, rand: 0, locks: [], excl: [], minExp: {}, maxExp: {}, nodeLimit: 2e5 })) { if (r.error) break; cons.push(r.lineup.map(p => p.key)); }
+  const dec = cons.map((_, i) => Math.pow(0.8, i)), decSum = dec.reduce((a, b) => a + b, 0) || 1;
+  cons.forEach((keys, i) => lineups.push({ keys, w: consensusShare * dec[i] / decSum, kind: 'consensus' }));
+  // keep total weight at 1 when a layer came out empty
+  const W = lineups.reduce((a, l) => a + l.w, 0); lineups.forEach(l => l.w /= W);
   const realized = {}; lineups.forEach(l => l.keys.forEach(k => realized[k] = (realized[k] || 0) + l.w * 100));
-  return { lineups, realized, casualDraws: raw.length, sharpCount: sharp.length };
+  onProgress && onProgress(1);
+  return { lineups, realized, casualDraws: raw.length, sharpCount: sharp.length, consensusCount: cons.length, consensusShare, concentration };
 }
 
 // Payout table: DraftKings "Prize Payouts" text pasted by the user, or a typical GPP shape.
@@ -1503,7 +1542,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
+    simIters: $('#simIters').value, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), passes: $('#passes').value, candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, gameCorr: num('gameCorr'), teamCorr: num('teamCorr') };
 }
 
 // ===== notices =====
@@ -1916,7 +1955,8 @@ async function runSim(mode) {
   try {
     msg('Replaying the slate…');
     const simPool = truthPool(pool, (st.projConf ?? 30) / 100);
-    const sim = await simulateScores(simPool, { iters, seed: 101, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap, onProgress: prog('sim') });
+    const runSeed = Math.floor(Math.random() * 1e9);
+    const sim = await simulateScores(simPool, { iters, seed: runSeed, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap, onProgress: prog('sim') });
     let opt = null;
     if (st.doOpt) {
       msg('Finding the optimal lineup in each replay…');
@@ -1925,7 +1965,8 @@ async function runSim(mode) {
       opt = await simOptimals(S.site, rows, sim, { maxIters: Math.min(iters, 1000), maxTeam: st.maxTeam || 0, onProgress: prog('opt') });
     }
     msg('Building the contest field…');
-    const field = await buildField(S.site, pool, { seed: 1, sharpShare: (st.sharp ?? 35) / 100, sharpRand: 18, onProgress: prog('field') });
+    const maxEntries = Math.max(...contests.map(c => c.entries));
+    const field = await buildField(S.site, pool, { seed: runSeed % 100000 + 7, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: prog('field') });
     const mineL = S.builtSite === S.site ? S.lineups : [];
     let mine = [];
     if (mineL.length) {
@@ -1949,8 +1990,8 @@ async function runSim(mode) {
         opt: optPct, cpt: cptPct, own: p.own || 0, field: field.realized[p.key] || 0, lev: optPct == null ? null : optPct - (p.own || 0) };
     });
     let built = null;
-    if (buildBest) built = await buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap });
-    S.sim = { conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
+    if (buildBest) built = await buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries });
+    S.sim = { fieldInfo: { consensusShare: field.consensusShare, concentration: field.concentration }, conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
     if (buildBest) S.simTab = 'built'; else if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
     S.whyOpen = null;
@@ -1978,7 +2019,7 @@ function truthPool(pool, conf) {
 }
 
 // ----- sim-built lineups: candidates -> contest screen -> pick -> fresh re-score -----
-async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap }) {
+async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries }) {
   const sd = !!site.showdown;
   const sigOf = l => sd ? l[0].key + '|' + l.slice(1).map(p => p.key).sort().join(',') : l.map(p => p.key).sort().join(',');
   const C = Math.max(30, +st.candN || 300), N = Math.max(1, Math.min(150, Math.round(st.bestN || 20)));
@@ -2016,7 +2057,25 @@ async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, cont
   const metric = ({ avgroi: 'roi' })[st.rankBy] || st.rankBy || 'blend';
   // Stage 1: every candidate on the fixed-seed replays and field
   msg(`Stage 1 of 3: scoring ${poolL.length} candidates in ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
-  const scr = await contestSimMulti(S.site, sim, keysOf(poolL), field, contests, f => simProgress({ from: 62, to: 76 }, f));
+  // Stability (as in Gridlock): each extra pass scores candidates against another field and another
+  // set of replays, and the results are averaged.
+  const P = Math.max(1, Math.min(5, +st.passes || 1));
+  const passSims = [sim], passFields = [field];
+  for (let pp = 1; pp < P; pp++) {
+    msg(`Stage 1 of 3: preparing pass ${pp + 1} of ${P}…`);
+    passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap }));
+    passFields.push(await buildField(S.site, pool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
+  }
+  const evalMany = async (keys, from, to) => {
+    let acc = null;
+    for (let pp = 0; pp < P; pp++) {
+      const r = await contestSimMulti(S.site, passSims[pp], keys, passFields[pp], contests, f => simProgress({ from: from + (to - from) * pp / P, to: from + (to - from) * (pp + 1) / P }, f));
+      if (!acc) acc = r; else r.forEach((x, i) => { const a = acc[i]; ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] += x[k]); a.c.forEach((c, ci) => ['roi', 'roiCap', 'cash', 'top1', 'win', 'avgPay'].forEach(k => c[k] += x.c[ci][k])); });
+    }
+    if (P > 1) acc.forEach(a => { ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] /= P); a.c.forEach(c => ['roi', 'roiCap', 'cash', 'top1', 'win', 'avgPay'].forEach(k => c[k] /= P)); });
+    return acc;
+  };
+  const scr = await evalMany(keysOf(poolL), 62, 76);
   // Scorer (as in Gridlock): z-scores across the pool of cash rate and robust ROI, the latter
   // winsorized at the 5th/95th percentile, so no single lucky first place decides a pick.
   const zs = contests.map((c, ci) => {
@@ -2059,33 +2118,50 @@ async function buildBestLineups({ site, st, pool, simPool, sim, opt, field, cont
     for (const x of best) for (const nb of neighbors(x.l)) { const g = sigOf(nb); if (!sigs.has(g)) { sigs.add(g); fresh.push(nb); } }
     if (!fresh.length) break;
     msg(`Stage 2 of 3: testing ${fresh.length} player swaps on the best lineups (round ${round} of 2)…`);
-    const rr = await contestSimMulti(S.site, sim, keysOf(fresh), field, contests, f => simProgress({ from: 76 + (round - 1) * 6, to: 82 + (round - 1) * 6 }, f));
+    const rr = await evalMany(keysOf(fresh), 76 + (round - 1) * 6, 82 + (round - 1) * 6);
     fresh.forEach((l, k) => items.push({ l, r: rr[k], sc: score(rr[k]) }));
   }
   const ranked = items.slice().sort((a, b) => b.sc - a.sc);
-  // greedy pick that respects min unique and max exposure from the Optimizer
+  // Selection (as in Gridlock): players with a min exposure are filled first, then picks go down the
+  // ranking under your max exposure and min unique; if that can't fill the set, the limits loosen in
+  // steps (one more shared player, then 30% more exposure, then neither) until it is full.
   const uniq = Math.max(1, Math.min(site.size, Math.round(st.uniq || 1)));
-  const cap = p => { const mx = p.maxExp ?? st.globalMax ?? DEFAULT_MAX_EXP; return mx != null && mx < 100 ? Math.max(1, Math.floor(mx / 100 * N + 1e-9)) : N; };
-  const used = {}; const picked = []; let skipped = 0;
-  for (const x of ranked) {
-    if (picked.length >= N) break;
-    const l = x.l; const ks = new Set(l.map(p => p.key));
-    if (l.some(p => (used[p.key] || 0) >= cap(p))) { skipped++; continue; }
-    if (picked.some(y => site.size - y.l.filter(p => ks.has(p.key)).length < uniq)) { skipped++; continue; }
-    picked.push(x); l.forEach(p => used[p.key] = (used[p.key] || 0) + 1);
-  }
+  const shareMax0 = site.size - uniq;
+  const cap0 = p => { const mx = p.maxExp ?? st.globalMax ?? DEFAULT_MAX_EXP; return mx != null && mx < 100 ? Math.max(1, Math.floor(mx / 100 * N + 1e-9)) : N; };
+  const used = {}; const picked = []; let relaxed = 0, skipped = 0;
+  const pass = (capMul, shareMax, forKey) => {
+    for (const x of ranked) {
+      if (picked.length >= N) break;
+      if (picked.includes(x)) continue;
+      if (forKey && !x.l.some(p => p.key === forKey)) continue;
+      if (x.l.some(p => (used[p.key] || 0) >= (capMul >= 99 ? N : Math.ceil(cap0(p) * capMul)))) { skipped++; continue; }
+      const ks = new Set(x.l.map(p => p.key));
+      if (picked.some(y => y.l.filter(p => ks.has(p.key)).length > shareMax)) { skipped++; continue; }
+      picked.push(x); x.l.forEach(p => used[p.key] = (used[p.key] || 0) + 1);
+    }
+  };
+  pool.filter(p => p.minExp > 0).sort((a, b) => b.minExp - a.minExp).forEach(p => {
+    const need = Math.ceil(p.minExp / 100 * N - 1e-9), have = () => picked.filter(x => x.l.some(q => q.key === p.key)).length;
+    for (const [cm, sm] of [[1, shareMax0], [1.3, shareMax0 + 1], [99, site.size - 1]]) {
+      if (have() >= need) break;
+      const before = picked.length; pass(cm, sm, p.key);
+      while (have() > need && picked.length > before) { const last = picked.pop(); last.l.forEach(q => used[q.key]--); }
+    }
+  });
+  const steps = [[1, shareMax0], [1, shareMax0 + 1], [1.3, shareMax0 + 2], [99, shareMax0 + 3]];
+  for (let k = 0; k < steps.length && picked.length < N; k++) { if (k > 0) relaxed = k; pass(steps[k][0], Math.min(site.size - 1, steps[k][1])); }
   // Stage 3: out-of-sample check on a separate fixed field and replays with 3x the runs; the
   // picks are then ordered by that check, since the search ranking carries its own luck.
   msg(`Stage 3 of 3: re-testing the ${picked.length} picks${mineNow.length ? ' and your lineups' : ''} on a fresh field and fresh replays…`);
-  const oosField = await buildField(S.site, pool, { seed: 99, sharpShare: (st.sharp ?? 35) / 100, sharpRand: 18, onProgress: f => simProgress({ from: 88, to: 92 }, f) });
-  const simC = await simulateScores(simPool, { iters: Math.min(4000, iters * 3), seed: 202, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap });
+  const oosField = await buildField(S.site, pool, { seed: (runSeed % 100000) + 99, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: f => simProgress({ from: 88, to: 92 }, f) });
+  const simC = await simulateScores(simPool, { iters: Math.min(4000, iters * 3), seed: runSeed + 202, teamW: (st.teamCorr ?? 8) / 100, gameW: (st.gameCorr ?? 16) / 100, vegas: vmap });
   const both = await contestSimMulti(S.site, simC, keysOf(picked.map(x => x.l).concat(mineNow)), oosField, contests, f => simProgress({ from: 92, to: 100 }, f));
   let val = both.slice(0, picked.length); const mineVal = both.slice(picked.length);
   const ord = picked.map((_, i) => i).sort((i, j) => score(val[j]) - score(val[i]));
   const lineups = ord.map(i => picked[i].l); val = ord.map(i => val[i]); const inSample = ord.map(i => picked[i].r);
   const avgOf = (arr, f) => arr.length ? arr.reduce((a, r) => a + f(r), 0) / arr.length : null;
   const roiAvg = r => r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, capAvg = r => r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length;
-  return { mine: val, lineups, candidates: items.length, swaps: items.length - poolL.length, metric, wanted: N, skipped,
+  return { passes: P, mine: val, lineups, candidates: items.length, swaps: items.length - poolL.length, metric, wanted: N, skipped, relaxed,
     fromYours: lineups.filter(l => yours.has(sigOf(l))).length, yoursCount: mineNow.length,
     screenRoi: avgOf(inSample, roiAvg), freshRoi: avgOf(val, roiAvg), freshCap: avgOf(val, capAvg), poolRoi: avgOf(scr, roiAvg), oosIters: Math.min(4000, iters * 3),
     mineFreshRoi: avgOf(mineVal, roiAvg), mineFreshCap: avgOf(mineVal, capAvg), mineFreshPer: contests.map((c, ci) => avgOf(mineVal, r => r.c[ci].roi)) };
@@ -2196,7 +2272,7 @@ function renderSim() {
   const notes = [];
   if (R.sig !== slateSig()) notes.push('<b>Your player pool changed since this run.</b> Run the simulation again to use the new numbers.');
   if (R.vegas) notes.push(`Vegas lines are shaping this run: game totals set how much each game swings together, and spreads set blowout risk.${R.vegasAdj ? ' Projections were also adjusted to implied team totals.' : ''}`);
-  notes.push(`Projection confidence ${R.conf ?? 100}%: each player's simulated average sits ${R.conf ?? 100}% of the way from his salary-implied points to your projection${(R.conf ?? 100) < 100 ? ', so value plays the sim likes are partly treated as projection error' : ''}. Use ROI to compare lineups rather than as a forecast. Field: ${R.sharp}% optimizer users, the rest picking by projected ownership. Contests: ${R.contests.map(c => `<b>${esc(c.name)}</b> (${c.entries.toLocaleString()} entries, ${money(c.fee)}, ${money(c.pool)} prizes, top ${c.paid.toLocaleString()} paid${c.source === 'auto' ? ', typical payout curve' : ''})`).join('; ')}.`);
+  notes.push(`Projection confidence ${R.conf ?? 100}%: each player's simulated average sits ${R.conf ?? 100}% of the way from his salary-implied points to your projection${(R.conf ?? 100) < 100 ? ', so value plays the sim likes are partly treated as projection error' : ''}. Use ROI to compare lineups rather than as a forecast. Field: ${R.fieldInfo ? `${Math.round(R.fieldInfo.consensusShare * 100)}% on the most obvious popular lineups, then ` : ''}${R.sharp}% optimizer users, the rest picking by projected ownership (30% of them leaning extra hard on chalk). Contests: ${R.contests.map(c => `<b>${esc(c.name)}</b> (${c.entries.toLocaleString()} entries, ${money(c.fee)}, ${money(c.pool)} prizes, top ${c.paid.toLocaleString()} paid${c.source === 'auto' ? ', typical payout curve' : ''})`).join('; ')}.`);
   note.innerHTML = `<div class="simnote">${notes.join('<br>')}</div>`;
   stats.hidden = true; foot.hidden = true;
 
@@ -2210,7 +2286,7 @@ function renderSim() {
     }
     const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
     if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates (${B.swaps || 0} of them player-swap improvements) by <b>${B.metric === 'top1' ? 'top 1% rate' : B.metric === 'cash' ? 'cash rate' : B.metric === 'roi' ? 'robust ROI' : 'a balance of cash rate and robust ROI'}</b>${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.skipped ? `, skipping ${B.skipped} that broke your min-unique or exposure settings` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. Fixed seeds make this repeatable: the same slate and settings give the same lineups every run. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${B.metric === 'top1' ? 'top 1% rate' : B.metric === 'cash' ? 'cash rate' : B.metric === 'roi' ? 'robust ROI' : 'a balance of cash rate and robust ROI'}</b>${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.</div>`;
     const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
