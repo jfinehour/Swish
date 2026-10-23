@@ -506,7 +506,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v29</p>
+<p class="ver" id="ver">Swish v30</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1564,6 +1564,13 @@ function readFile(file, fn) { const r = new FileReader(); r.onload = () => fn(St
 
 // ===== persistence (per-browser convenience) =====
 function save() {
+  // The Lineups tab's Optimized set mirrors the Optimizer's current lineups, including changes made
+  // from the Simulate tab (Keep lineups, Add to / Replace my lineups).
+  if (S.builtSite === S.site && S.players.length) {
+    const keys = S.lineups.map(l => l.map(p => p.key)), B = S.bank || {};
+    const same = B.site === S.site && (B.file || '') === (S.fileName || '') && JSON.stringify(B.opt || []) === JSON.stringify(keys);
+    if (!same) S.bank = Object.assign(B, bankBase(), { opt: keys, optAt: Date.now(), optType: S.lineupType || B.optType });
+  }
   store.set('bank', S.bank || {});
   store.set('slate', { isBuiltin: !!S.isBuiltin, site: S.site, players: S.players, source: S.source, fileName: S.fileName, gamesOff: [...S.gamesOff], vegas: S.vegas || null, gameTimes: S.gameTimes || {} });
   store.set('settings', settings());
@@ -1576,6 +1583,13 @@ function restore() {
   if (s && s.players && s.players.length && SITES[s.site]) { Object.assign(S, s, { gamesOff: new Set(s.gamesOff || []) }); }
   else if (s && s.source === 'empty' && SITES[s.site]) { Object.assign(S, s, { players: [], gamesOff: new Set() }); }
   else { S.source = 'sample'; loadBuiltin(); }
+  // bring back the Optimizer's lineups from last time for this slate
+  const B = S.bank;
+  if (B && B.site === S.site && (B.file || '') === (S.fileName || '') && (B.opt || []).length) {
+    const by = new Map(S.players.map(p => [p.key, p]));
+    const ls = B.opt.map(ks => ks.map(k => by.get(k))).filter(l => l.every(Boolean));
+    if (ls.length) { S.lineups = ls; S.builtSite = S.site; S.lineupType = B.optType || 'proj'; }
+  }
 }
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
@@ -1813,7 +1827,8 @@ function bankSet(which) {
   if (which === 'allRaw') which = 'all';
   if (which === 'sim') return take(B.sim, B.simStats || []);
   const seen = new Set(), out = [];
-  for (const x of take(B.opt).concat(take(B.sim, B.simStats || []))) { const g = x.l.map(p => p.key).sort().join(','); if (!seen.has(g)) { seen.add(g); out.push(x); } }
+  const simTaken = take(B.sim, B.simStats || []), simBy = new Map(simTaken.map(x => [x.l.map(p => p.key).sort().join(','), x]));
+  for (const x of take(B.opt).concat(simTaken)) { const g = x.l.map(p => p.key).sort().join(','); if (!seen.has(g)) { seen.add(g); out.push(simBy.get(g) || x); } }
   return out;
 }
 let LU_SET = 'opt';
@@ -1827,12 +1842,12 @@ function renderLineupsView() {
   document.querySelectorAll('#luTabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.set === LU_SET));
   const list = bankSet(LU_SET);
   const when = t => t ? new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-  $('#luMeta').textContent = LU_SET === 'opt' ? (nO ? `Built ${when(B.optAt)} · ${LT_LABEL[B.optType] || 'Projection'}` : '') : LU_SET === 'sim' ? (nS ? `Sim-built ${when(B.simAt)} · ${(B.simContests || []).join(' + ')}` : '') : (nA ? 'Optimized and sim-built, duplicates removed' : '');
+  $('#luMeta').textContent = LU_SET === 'opt' ? (nO ? `Your Optimizer lineups · updated ${when(B.optAt)} · ${LT_LABEL[B.optType] || 'Projection'}` : '') : LU_SET === 'sim' ? (nS ? `Sim-built ${when(B.simAt)} · ${(B.simContests || []).join(' + ')}` : '') : (nA ? 'Optimized and sim-built, duplicates removed' : '');
   const stats = $('#luStats'), foot = $('#luFoot'), body = $('#luBody');
   $('#luOutwrap').hidden = true;
   if (!list.length) {
     stats.hidden = true; foot.hidden = true;
-    body.innerHTML = `<div class="empty">${LU_SET === 'sim' ? 'No sim-built lineups yet. Run <b>Build best simmed lineups</b> on the Simulate tab and they will appear here.' : LU_SET === 'opt' ? 'No optimized lineups yet. Use <b>Build lineups</b> on the Optimizer tab and they will appear here.' : 'No lineups yet. Build lineups on the Optimizer tab or sim-built lineups on the Simulate tab.'}</div>`;
+    body.innerHTML = `<div class="empty">${LU_SET === 'sim' ? 'No sim-built lineups yet. Run <b>Build best simmed lineups</b> on the Simulate tab and they will appear here.' : LU_SET === 'opt' ? 'No optimized lineups yet. Use <b>Build lineups</b> on the Optimizer tab; whatever set the Optimizer holds shows here, including changes from Keep, Add or Replace on the Simulate tab.' : 'No lineups yet. Build lineups on the Optimizer tab or sim-built lineups on the Simulate tab.'}</div>`;
     return;
   }
   const sd = !!site.showdown;
@@ -2482,7 +2497,7 @@ function renderSim() {
     if (BUILT) {
       foot.innerHTML = `<span class="meta">Use these as your lineups for export on the Optimizer tab.</span><button class="btn" id="addBuilt">Add to my lineups</button><button class="btn primary" id="useBuilt">Replace my lineups</button>`;
       $('#useBuilt').onclick = () => {
-        S.lineups = B.lineups.slice(); S.builtSite = S.site; R.mine = B.mine.slice(); R.mineLineups = B.lineups.slice(); R.mineStale = false;
+        S.lineups = B.lineups.slice(); S.builtSite = S.site; save(); R.mine = B.mine.slice(); R.mineLineups = B.lineups.slice(); R.mineStale = false;
         notify('ok', `Your lineups are now the <b>${B.lineups.length}</b> sim-built lineups. They're on the Optimizer tab and in your export.`);
         renderPool(); renderResults(); renderSim();
       };
@@ -2490,7 +2505,7 @@ function renderSim() {
         const have = new Set((S.builtSite === S.site ? S.lineups : []).map(l => l.map(p => p.key).sort().join(',')));
         if (S.builtSite !== S.site) S.lineups = [];
         const add = B.lineups.filter(l => { const g = l.map(p => p.key).sort().join(','); if (have.has(g)) return false; have.add(g); return true; });
-        S.lineups = S.lineups.concat(add); S.builtSite = S.site; R.mineStale = true;
+        S.lineups = S.lineups.concat(add); S.builtSite = S.site; save(); R.mineStale = true;
         notify('ok', `Added <b>${add.length}</b> sim-built lineup${add.length === 1 ? '' : 's'}. You now have ${S.lineups.length} on the Optimizer tab.`);
         renderPool(); renderResults(); renderSim();
       };
@@ -2504,7 +2519,7 @@ function renderSim() {
       const score = r => by === 'avgroi' ? r.c.reduce((a, x) => a + x.roi, 0) / r.c.length : val(r, by);
       const ranked = R.mine.map((r, i) => ({ r, i })).sort((a, b) => score(b.r) - score(a.r)).slice(0, n);
       R.mine = ranked.map(x => x.r); R.mineLineups = ranked.map(x => R.mineLineups[x.i]);
-      S.lineups = R.mineLineups.slice(); S.builtSite = S.site; R.mineStale = false; S.whyOpen = null;
+      S.lineups = R.mineLineups.slice(); S.builtSite = S.site; R.mineStale = false; S.whyOpen = null; save();
       notify('ok', `Kept your top <b>${n}</b> lineups by ${$('#keepBy').selectedOptions[0].text}. They're now the set on the Optimizer tab and in your export.`);
       renderPool(); renderResults(); renderSim();
     };
@@ -2531,7 +2546,7 @@ function renderSim() {
       const add = [];
       for (const x of L.slice(0, n)) { const lu = x.rows.map(r => r.src); const sig = lu.map(p => p.key).sort().join(','); if (!have.has(sig)) { have.add(sig); add.push(lu); } }
       if (S.builtSite !== S.site) S.lineups = [];
-      S.lineups = S.lineups.concat(add); S.builtSite = S.site; if (S.sim) S.sim.mineStale = true;
+      S.lineups = S.lineups.concat(add); S.builtSite = S.site; save(); if (S.sim) S.sim.mineStale = true;
       notify('ok', `Added <b>${add.length}</b> sim-optimal lineup${add.length === 1 ? '' : 's'}. You now have ${S.lineups.length} on the Optimizer tab. Run the simulation again to score them.`);
       renderPool(); renderResults(); renderSim();
     };
