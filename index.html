@@ -301,7 +301,6 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <button data-site="sd" aria-pressed="false">DK Showdown</button>
   </div>
   <div class="actions">
-    <label class="btn" for="salFile">Import salaries</label><input type="file" id="salFile" accept=".csv,text/csv">
     <label class="btn" for="projFile">Import projections</label><input type="file" id="projFile" accept=".csv,text/csv">
     <button class="btn" id="newSlate">New slate</button>
   </div>
@@ -482,7 +481,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
   </aside>
 </div>
 </div>
-<p class="ver" id="ver">Swish v22</p>
+<p class="ver" id="ver">Swish v23</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1133,7 +1132,7 @@ function renderVegas() {
       <label title="${a} spread">${a} ±<input class="n" data-vf="spread" type="number" step="0.5" value="${sideA}" placeholder="–"></label>
       <label>Tip<input class="n" data-vf="time" type="time" value="${(S.gameTimes || {})[k] ? new Date(S.gameTimes[k]).toTimeString().slice(0, 5) : ''}"></label>
       <div class="vi">${ia ? `Implied: ${a} <b>${f1(ia.implied)}</b> · ${b} <b>${f1(ib.implied)}</b>` : 'No line yet'}</div></div>`;
-  }).join('') + `</div><span class="hint" style="font-size:12px;color:var(--muted)">Spread (±) is from the first team's side; the favorite is negative. Tip times come from your DraftKings salary file or the line pull; edit any number to override.</span>`;
+  }).join('') + `</div><span class="hint" style="font-size:12px;color:var(--muted)">Spread (±) is from the first team's side; the favorite is negative. Tip times come from the line pull or can be typed in; edit any number to override.</span>`;
 }
 
 // ===== Game times and late-swap slot order =====
@@ -1361,7 +1360,7 @@ function importProjections(text, fileName, quiet) {
       if (!quiet) notify('ok', `Loaded <b>${sl.players.length}</b> players from ${esc(fileName)} as a <b>${SITES[sl.site].label}</b> slate, with projections, ceilings, ownership and DraftKings IDs for upload.`);
       return;
     }
-    if (!S.players.length || S.source === 'sample') return notify('err', `${esc(fileName)} has projections but no salaries or player IDs. Import the contest's salary CSV first, then these projections.`);
+    if (!S.players.length || S.source === 'sample') return notify('err', `${esc(fileName)} has projections but no salaries or player IDs, so Swish can't build lineups from it. Use a projections export that includes Salary and the site's player ID column (like DKSlateID).`);
   }
   let hit = 0; const miss = [];
   for (const r of T) {
@@ -1480,6 +1479,12 @@ function loadSample(site) {
   S.site = site; S.players = sampleSlate(site); S.source = 'sample'; S.fileName = ''; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null;
   save(); render();
 }
+// A DraftKings/FanDuel salary export still works if picked; everything else is read as projections.
+function importAny(text, name) {
+  const head = text.slice(0, 4000).toLowerCase();
+  if (head.includes('name + id') || head.includes('roster position') || (head.includes('nickname') && head.includes('fppg'))) importSalaries(text, name);
+  else importProjections(text, name);
+}
 function readFile(file, fn) { const r = new FileReader(); r.onload = () => fn(String(r.result), file.name); r.readAsText(file); }
 
 // ===== persistence (per-browser convenience) =====
@@ -1512,7 +1517,7 @@ function sampleBanner() {
   const box = $('#notices'); box.querySelector('.sticky')?.remove();
   if (S.source !== 'sample') return;
   const el = document.createElement('div'); el.className = 'notice sticky';
-  el.innerHTML = `<div><b>Sample slate with fictional players.</b> Import your DraftKings or FanDuel salary CSV (or drop it anywhere on the page) to optimize a real slate, then import projections with Name, Proj and Own columns.</div>`;
+  el.innerHTML = `<div><b>Sample slate with fictional players.</b> Use Import projections (or drop the file anywhere on the page) to load your slate, then build. Your projections file needs player names, salaries, positions, projections and the site's player ID (like DKSlateID).</div>`;
   box.prepend(el);
 }
 
@@ -1559,7 +1564,7 @@ function renderPool() {
   const lockN = S.players.filter(p => p.lock).length, exN = S.players.filter(p => p.excl).length;
   $('#poolMeta').textContent = `${rows.length} shown · ${lockN} locked · ${exN} excluded`;
   $('#pool thead').innerHTML = '<tr>' + COLS.map(c => `<th class="${c.n ? 'n ' : ''}${c.s ? 'sortable' : ''}" data-k="${c.k}"${S.sort.key === c.k ? ` data-dir="${dir > 0 ? '▲' : '▼'}"` : ''}>${c.t}</th>`).join('') + '</tr>';
-  if (!S.players.length) { $('#pool tbody').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No slate loaded. Use <b>Import salaries</b> or <b>Import projections</b> above, or drop a CSV anywhere on the page.</td></tr>`; return; }
+  if (!S.players.length) { $('#pool tbody').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No slate loaded. Use <b>Import projections</b> above, or drop a CSV anywhere on the page.</td></tr>`; return; }
   if (!rows.length) { $('#pool tbody').innerHTML = `<tr><td colspan="${COLS.length}" class="empty">No players match these filters.</td></tr>`; return; }
   const sdNote = S.site === 'sd';
   $('#pool tbody').innerHTML = rows.map(p => {
@@ -1612,8 +1617,8 @@ function renderResults() {
       ps.map(p => { const e = c[p.key] / N * 100; return `<tr><td class="pname">${esc(p.name)}</td><td class="pos">${p.pos.join('/')}</td><td class="team">${esc(p.team)}</td><td class="n">${money(p.salary)}</td><td class="n">${f1(p.proj)}</td><td class="n">${f1(p.own)}</td><td class="n">${c[p.key]}</td><td><span class="exp" style="justify-content:flex-start"><i style="width:${Math.max(2, e * 1.2)}px"></i><span class="num">${Math.round(e)}%</span></span></td></tr>`; }).join('') + '</tbody></table>';
   }
   const swapOn = settings().lateSwap !== false && site.slots && !site.showdown, timed = S.players.some(p => tipOf(p) != null);
-  const swapNote = !swapOn || !site.slots.some(x => x.length > 1) ? '' : timed ? (S.site === 'fd' ? ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F and F/C, the latest in UTIL.' : ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F, the latest in UTIL.') : ' Add tip times (Vegas lines panel or a DraftKings salary file) to order slots for late swap.';
-  $('#exportMeta').textContent = (S.source === 'sample' ? 'Sample IDs are fictional. Import a real salary file to get an upload-ready CSV.' : `Upload format for ${site.label} using player IDs from ${S.fileName}.`) + swapNote;
+  const swapNote = !swapOn || !site.slots.some(x => x.length > 1) ? '' : timed ? (S.site === 'fd' ? ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F and F/C, the latest in UTIL.' : ' Slots are ordered for late swap: earliest games in PG–C, later games in G/F, the latest in UTIL.') : ' Add tip times (pull lines or type them in the Vegas lines panel) to order slots for late swap.';
+  $('#exportMeta').textContent = (S.source === 'sample' ? 'Sample IDs are fictional. Import your projections to get an upload-ready CSV.' : `Upload format for ${site.label} using player IDs from ${S.fileName}.`) + swapNote;
 }
 
 function uploadCSV() {
@@ -1714,12 +1719,11 @@ $('#newSlate').addEventListener('click', askClearSlate);
 // ===== events =====
 $('#siteSeg').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.dataset.site === S.site) return;
-  if (S.source === 'file' && !S.isBuiltin) notify('', `Your imported file is a <b>${SITES[S.site].label}</b> slate, so switching to <b>${SITES[b.dataset.site].label}</b> loads the sample slate. Import that contest's salary file to use real players.`);
+  if (S.source === 'file' && !S.isBuiltin) notify('', `Your imported file is a <b>${SITES[S.site].label}</b> slate, so switching to <b>${SITES[b.dataset.site].label}</b> loads the sample slate. Import that site's projections to use real players.`);
   if (b.dataset.site === 'dk') { loadSample('dk'); return; }
   loadSample(b.dataset.site);
 });
-$('#salFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f, importSalaries); e.target.value = ''; });
-$('#projFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f, importProjections); e.target.value = ''; });
+$('#projFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f, importAny); e.target.value = ''; });
 $('#games').addEventListener('click', e => { const b = e.target.closest('[data-game]'); if (!b) return; const g = b.dataset.game; S.gamesOff.has(g) ? S.gamesOff.delete(g) : S.gamesOff.add(g); save(); render(); });
 $('#posChips').addEventListener('click', e => { const b = e.target.closest('[data-pos]'); if (b) { S.pos = b.dataset.pos; render(); } });
 $('#viewChips').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (b) { S.view = b.dataset.view; render(); } });
@@ -1784,11 +1788,7 @@ addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; $('#drop').hidden = true;
   const f = e.dataTransfer?.files?.[0]; if (!f) return;
-  readFile(f, (text, name) => {
-    const head = text.slice(0, 4000).toLowerCase();
-    if (head.includes('name + id') || head.includes('roster position') || (head.includes('nickname') && head.includes('fppg'))) importSalaries(text, name);
-    else importProjections(text, name);
-  });
+  readFile(f, importAny);
 });
 
 // ===== simulation UI =====
