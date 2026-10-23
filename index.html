@@ -431,12 +431,9 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
       <div class="form">
         <div class="field"><label for="simIters">Iterations</label>
           <select id="simIters" class="sel"><option value="500">500 (fast)</option><option value="1000" selected>1,000</option><option value="2500">2,500</option><option value="5000">5,000 (slow)</option></select></div>
-        <div class="field"><span class="flabel">Contests</span>
-          <div class="contests">
-            <div class="contests" id="presetCts"></div>
-            <label class="ct"><input type="checkbox" id="ctCustom"><span><b>Custom contest</b><small>Your own entries, fee and payouts</small></span></label>
-          </div>
-        </div>
+        <div class="field"><label for="ctPick">Contest</label>
+          <select id="ctPick" class="sel"></select>
+          <span class="hint" id="ctInfo"></span></div>
         <div class="customct" id="customBox" hidden>
           <div class="two">
             <div class="field"><label for="entries">Entries</label><input type="number" id="entries" min="2" step="1" value="10000"></div>
@@ -507,7 +504,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v27</p>
+<p class="ver" id="ver">Swish v28</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1581,7 +1578,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, ctCustom: $('#ctCustom').checked, bestN: num('bestN'), passes: $('#passes').value, candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr') };
+    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr') };
 }
 
 // ===== notices =====
@@ -1848,7 +1845,7 @@ function renderLineupsView() {
   $('#luClear').hidden = LU_SET === 'all';
   $('#luSimAll').hidden = LU_SET !== 'all';
   if (LU_SET === 'all') $('#luMeta').textContent = ALLRUN ? `Simulated together ${when(B.allAt)} · ${(B.allContests || []).join(' + ')} · sorted by robust ROI` : 'Optimized and sim-built, duplicates removed';
-  $('#luExportMeta').textContent = `Exports these ${list.length} lineups in ${site.label} upload format${settings().lateSwap !== false && !sd ? ', slots ordered for late swap' : ''}.` + (ALLRUN ? ` Every lineup was scored on the same ${(B.allIters || 0).toLocaleString()} replays and field, averaged across contests, so the numbers compare directly. Full detail is under Your lineups on the Simulate tab.${list.some(x => !x.stAll) ? ' Lineups added since then show no numbers; press Simulate all again.' : ''}` : withSim ? (LU_SET === 'all' ? ' ROI figures for sim-built lineups come from their own check; press Simulate all to score every lineup on the same replays.' : ' ROI figures come from the sim-built check (averaged across its contests).') : (LU_SET === 'all' ? ' Press Simulate all to score every lineup on the same replays.' : ''));
+  $('#luExportMeta').textContent = `Exports these ${list.length} lineups in ${site.label} upload format${settings().lateSwap !== false && !sd ? ', slots ordered for late swap' : ''}.` + (ALLRUN ? ` Every lineup was scored on the same ${(B.allIters || 0).toLocaleString()} replays and field, so the numbers compare directly. Full detail is under Your lineups on the Simulate tab.${list.some(x => !x.stAll) ? ' Lineups added since then show no numbers; press Simulate all again.' : ''}` : withSim ? (LU_SET === 'all' ? ' ROI figures for sim-built lineups come from their own check; press Simulate all to score every lineup on the same replays.' : ' ROI figures come from the sim-built check.') : (LU_SET === 'all' ? ' Press Simulate all to score every lineup on the same replays.' : ''));
 }
 const luFname = () => `${S.site === 'fd' ? 'fanduel' : S.site === 'sd' ? 'dk-showdown' : 'draftkings'}-nba-${LU_SET === 'sim' ? 'simbuilt' : LU_SET === 'opt' ? 'optimized' : 'all'}-lineups.csv`;
 $('#luSimAll').addEventListener('click', () => {
@@ -2039,21 +2036,32 @@ const CONTESTS = [
 702nd-1501st $6
 1502nd-3996th $5` },
 ];
-let CT_SEL = (() => { try { return JSON.parse(localStorage.getItem('swish:ctSel')) || {}; } catch (e) { return {}; } })();
-const ctOn = c => CT_SEL[c.id] ?? true;
+// One contest at a time, as in Gridlock: sims and sim-built lineups are tuned to a single payout
+// structure and field size. The choice is remembered per site.
+let CT_PICK = (() => { try { return JSON.parse(localStorage.getItem('swish:ctPick')) || {}; } catch (e) { return {}; } })();
+const ctPays = c => c.payouts ? parsePayouts(c.payouts) : autoPayouts(c.entries, c.fee, { pool: c.pool, first: c.first });
+function pickedContestId() {
+  const list = CONTESTS.filter(c => c.site === S.site), want = CT_PICK[S.site];
+  if (want === 'custom' || (want && list.some(c => c.id === want))) return want;
+  return list.length ? list[0].id : 'custom';
+}
 function renderContestList() {
-  const box = $('#presetCts'); if (!box) return;
-  const list = CONTESTS.filter(c => c.site === S.site);
-  box.innerHTML = list.length ? list.map(c => {
-    const pays = c.payouts ? parsePayouts(c.payouts) : autoPayouts(c.entries, c.fee, { pool: c.pool, first: c.first });
-    const pool = pays.reduce((a, r) => a + r.pay * (r.end - r.start + 1), 0), paid = pays[pays.length - 1].end;
-    return `<label class="ct"><input type="checkbox" data-ct="${c.id}"${ctOn(c) ? ' checked' : ''}><span><b>${esc(c.name)}</b><small>${money(c.fee)} · ${c.entries.toLocaleString()} entries · ${money(pool)} prizes · top ${paid.toLocaleString()} paid · 1st ${money(pays[0].pay)}${c.payouts ? '' : ' · payouts estimated'}</small></span></label>`;
-  }).join('') : `<p class="hint" style="margin:0;font-size:12px;color:var(--muted)">No saved contests for ${esc(SITES[S.site].label)}. Use a custom contest below.</p>`;
+  const sel = $('#ctPick'); if (!sel) return;
+  const list = CONTESTS.filter(c => c.site === S.site), cur = pickedContestId();
+  sel.innerHTML = list.map(c => `<option value="${c.id}"${c.id === cur ? ' selected' : ''}>${esc(c.name)}</option>`).join('') + `<option value="custom"${cur === 'custom' ? ' selected' : ''}>Custom contest…</option>`;
+  syncContestInfo();
+}
+function syncContestInfo() {
+  const id = $('#ctPick').value, c = CONTESTS.find(x => x.id === id);
+  $('#customBox').hidden = id !== 'custom';
+  if (!c) { $('#ctInfo').textContent = 'Enter the entries, fee and payouts below.'; return; }
+  const pays = ctPays(c), pool = pays.reduce((a, r) => a + r.pay * (r.end - r.start + 1), 0), paid = pays[pays.length - 1].end;
+  $('#ctInfo').textContent = `${money(c.fee)} entry · ${c.entries.toLocaleString()} entries · ${money(pool)} prizes · top ${paid.toLocaleString()} paid · 1st ${money(pays[0].pay)}${c.payouts ? '' : ' · payouts estimated'}`;
 }
 function selectedContests(st) {
-  const out = [];
-  CONTESTS.forEach((c, i) => { if (c.site === S.site && ctOn(c)) out.push({ name: c.name, short: c.short, entries: c.entries, fee: c.fee, payouts: c.payouts ? parsePayouts(c.payouts) : autoPayouts(c.entries, c.fee, { pool: c.pool, first: c.first }), source: c.payouts ? 'preset' : 'auto' }); });
-  if ($('#ctCustom').checked) {
+  const out = []; const id = pickedContestId(); const c = CONTESTS.find(x => x.id === id && x.site === S.site);
+  if (c) out.push({ name: c.name, short: c.short, entries: c.entries, fee: c.fee, payouts: ctPays(c), source: c.payouts ? 'preset' : 'auto' });
+  else {
     const entries = Math.max(2, Math.round(st.entries || 10000)), fee = Math.max(0, st.fee ?? 5);
     let payouts = parsePayouts(st.payText); const pasted = payouts.length > 0;
     if (!pasted) payouts = autoPayouts(entries, fee);
@@ -2406,7 +2414,7 @@ function renderSim() {
   $('#optView').hidden = S.mainView !== 'opt'; $('#simView').hidden = S.mainView !== 'sim'; $('#luView').hidden = S.mainView !== 'lu';
   renderLineupsView();
   $('#simSiteLabel').textContent = site.label;
-  if ($('#presetCts').dataset.site !== S.site) { renderContestList(); $('#presetCts').dataset.site = S.site; }
+  if ($('#ctPick').dataset.site !== S.site) { renderContestList(); $('#ctPick').dataset.site = S.site; }
   { const done = !!(R && R.site === S.site); $('#simCt').textContent = done ? '✓' : ''; $('#simCt').hidden = !done; }
   document.querySelectorAll('#simTabs button').forEach(b => b.setAttribute('aria-pressed', b.dataset.tab === S.simTab));
   const body = $('#simBody'), note = $('#simNote'), foot = $('#simFoot'), stats = $('#simStats');
@@ -2546,16 +2554,13 @@ $('#vegasGames').addEventListener('change', e => {
 const syncVegasW = () => { $('#vegasWOut').textContent = $('#vegasW').value + '%'; $('#vegasWBox').hidden = !$('#vegasAdj').checked; };
 $('#vegasW').addEventListener('input', () => { syncVegasW(); renderPool(); });
 $('#vegasAdj').addEventListener('change', () => { syncVegasW(); renderPool(); });
-const syncCustom = () => { $('#customBox').hidden = !$('#ctCustom').checked; };
-$('#ctCustom').addEventListener('change', syncCustom);
-$('#presetCts').addEventListener('change', e => { const i = e.target.closest('[data-ct]'); if (!i) return; CT_SEL[i.dataset.ct] = i.checked; try { localStorage.setItem('swish:ctSel', JSON.stringify(CT_SEL)); } catch (x) {} });
+$('#ctPick').addEventListener('change', () => { CT_PICK[S.site] = $('#ctPick').value; try { localStorage.setItem('swish:ctPick', JSON.stringify(CT_PICK)); } catch (x) {} syncContestInfo(); });
 $('#goSim').addEventListener('click', () => { S.mainView = 'sim'; S.simTab = 'mine'; renderSim(); scrollTo({ top: 0 }); runSim(); });
 [['sharp', 'sharpOut'], ['projConf', 'projConfOut'], ['paceCorr', 'gameOut'], ['usageCorr', 'teamOut']].forEach(([i, o]) => { const f = () => $('#' + o).textContent = $('#' + i).value + '%'; $('#' + i).addEventListener('input', f); f(); });
 
 restore();
 $('#randOut').textContent = $('#rand').value + '%';
 [['sharp', 'sharpOut'], ['projConf', 'projConfOut'], ['paceCorr', 'gameOut'], ['usageCorr', 'teamOut']].forEach(([i, o]) => $('#' + o).textContent = $('#' + i).value + '%');
-syncCustom();
 syncVegasW();
 syncLineType();
 render();

@@ -1,6 +1,6 @@
 // Swish offline support. Pages load from the network first so updates show up
 // right away; the cached copy is used only when the device is offline.
-const CACHE = 'swish-v27';
+const CACHE = 'swish-v28';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/maskable-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
