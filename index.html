@@ -506,7 +506,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v30</p>
+<p class="ver" id="ver">Swish v31</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1230,11 +1230,18 @@ function slotMatch(site, players, slotIdx) {
   for (const s of slotIdx.slice().sort((a, b) => S2[a].length - S2[b].length)) if (!tryS(s, [])) return null;
   return slotIdx.map(s => players[matchS[s]]);
 }
+// Put every player in a slot he is eligible for, keeping the current order when it is already legal.
+function fixSlots(site, l) {
+  if (!site.slots || site.showdown || l.length !== site.size) return l;
+  if (l.every((p, i) => p.pos.some(x => site.slots[i].includes(x)))) return l;
+  return slotMatch(site, l, site.slots.map((_, i) => i)) || l;
+}
 function lateSwapOrder(site, l) {
-  if (!site.slots || site.showdown || !l.every(p => tipOf(p) != null)) return l;
+  if (!site.slots || site.showdown) return l;
+  if (!l.every(p => tipOf(p) != null)) return fixSlots(site, l);
   const flex = site.slots.map((s, i) => i).filter(i => site.slots[i].length > 1);
   const times = [...new Set(l.map(tipOf))].sort((a, b) => a - b);
-  if (!flex.length || times.length < 2) return l;
+  if (!flex.length || times.length < 2) return fixSlots(site, l);
   // Try every legal arrangement; score = UTIL slots' game ranks first, then the other flex
   // slots (G/F on DraftKings; G/F then F/C on FanDuel).
   const rank = p => times.indexOf(tipOf(p));
@@ -1252,9 +1259,9 @@ function lateSwapOrder(site, l) {
     const s = order[k];
     for (let j = 0; j < l.length; j++) if (!used[j] && l[j].pos.some(x => site.slots[s].includes(x))) { used[j] = true; cur[s] = l[j]; dfs(k + 1); used[j] = false; }
   })(0);
-  return best || l;
+  return best || fixSlots(site, l);
 }
-const swapOrder = l => settings().lateSwap === false ? l : lateSwapOrder(SITES[S.site], l);
+const swapOrder = l => settings().lateSwap === false ? fixSlots(SITES[S.site], l) : lateSwapOrder(SITES[S.site], l);
 
 // ===== helpers =====
 const $ = s => document.querySelector(s);
@@ -2294,7 +2301,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
       const elig = pool.filter(q => !inL.has(q.key) && q.proj > 0).sort((x, y) => lev(y) - lev(x));
       const picks = elig.slice(0, 8), rest = elig.slice(8);
       for (let k = 0; k < 5 && rest.length; k++) picks.push(rest.splice(Math.floor(rng() * rest.length), 1)[0]);
-      for (const q of picks) { const nx = l.slice(); nx[i] = q; if (valid(nx)) out.push(nx); }
+      for (const q of picks) { const nx = l.slice(); nx[i] = q; if (valid(nx)) out.push(fixSlots(site, nx)); }
     });
     return out;
   };
