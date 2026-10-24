@@ -506,7 +506,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v31</p>
+<p class="ver" id="ver">Swish v32</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1202,7 +1202,7 @@ function renderVegas() {
     const sideA = v && v.homeSpread != null ? (v.home === a ? v.homeSpread : -v.homeSpread) : '';
     const ia = vegasFor(g.teams.find(t => canon(t) === a)), ib = vegasFor(g.teams.find(t => canon(t) === b));
     return `<div class="vrow" data-vk="${k}" data-a="${a}" data-b="${b}">
-      <div class="vt"><b>${a}</b> v <b>${b}</b>${v && v.home ? ` <small class="pos">at ${v.home}</small>` : ''}${v && v.src === 'manual' ? ' <small class="pos">· edited</small>' : ''}</div>
+      <div class="vt"><b>${a}</b> v <b>${b}</b>${v && v.home ? ` <small class="pos">at ${v.home}</small>` : ''}${v && v.src === 'manual' ? ' <small class="pos">· edited</small>' : v && v.at ? ` <small class="pos">· pulled ${new Date(v.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</small>` : ''}</div>
       <label>Total<input class="n" data-vf="total" type="number" step="0.5" value="${v && v.total != null ? v.total : ''}" placeholder="–"></label>
       <label title="${a} spread">${a} ±<input class="n" data-vf="spread" type="number" step="0.5" value="${sideA}" placeholder="–"></label>
       <label>Tip<input class="n" data-vf="time" type="time" value="${(S.gameTimes || {})[k] ? new Date(S.gameTimes[k]).toTimeString().slice(0, 5) : ''}"></label>
@@ -1371,8 +1371,7 @@ function importDK(rows, fileName) {
     else { p.id = r['id']; p.salary = sal; }
   }
   const players = [...byKey.values()].filter(p => p.id && (!showdown || p.cptId));
-  S.gameTimes = tips;
-  loadSlate(showdown ? 'sd' : 'dk', players, fileName);
+  loadSlate(showdown ? 'sd' : 'dk', players, fileName, tips);
 }
 function importFD(rows, fileName) {
   rows = rows.filter(r => r['id'] && r['salary']);
@@ -1432,14 +1431,15 @@ function importProjections(text, fileName, quiet) {
   const withIds = T.filter(r => pickCol(r, P_ID) && numOf(pickCol(r, ['salary', 'sal', 'dk salary', 'fd salary'])));
   const standalone = withIds.length >= T.length * 0.5;
   const idMatched = withIds.filter(r => byId.has(String(pickCol(r, P_ID)))).length;
-  const matched = S.source === 'sample' || S.isBuiltin ? 0 : standalone ? (idMatched >= withIds.length * 0.8 ? T.length : 0) : T.filter(r => find(r).length).length;
-  // Load as its own slate when nothing real is loaded yet or the file is for a different slate.
+  // A full projections file (salaries + IDs) always starts a fresh slate; only a projections-only file
+  // (no salaries or IDs) updates the slate already loaded.
+  const matched = S.source === 'sample' || S.isBuiltin || standalone ? 0 : T.filter(r => find(r).length).length;
   if (matched < T.length * 0.5) {
     const sl = slateFromProjections(T, fileName);
     if (sl.players.length >= SITES[sl.site].size) {
-      S.isBuiltin = false; S.site = sl.site; S.players = sl.players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null; S.gameTimes = {};
-      save(); render();
-      if (!quiet) notify('ok', `Loaded <b>${sl.players.length}</b> players from ${esc(fileName)} as a <b>${SITES[sl.site].label}</b> slate, with projections, ceilings, ownership and DraftKings IDs for upload.`);
+      freshSlate(sl.site, sl.players, fileName);
+      const kept = Object.keys(S.vegas || {}).filter(k => slateGames().some(g => pairKey(g.teams[0], g.teams[1]) === k)).length;
+      if (!quiet) notify('ok', `Loaded <b>${sl.players.length}</b> players from ${esc(fileName)} as a fresh <b>${SITES[sl.site].label}</b> slate. Locks, boosts, exposures, lineups and simulation results were reset.${kept ? ` Vegas lines carried over for ${kept} of ${slateGames().length} games.` : ''}`);
       return;
     }
     if (!S.players.length || S.source === 'sample') return notify('err', `${esc(fileName)} has projections but no salaries or player IDs, so Swish can't build lineups from it. Use a projections export that includes Salary and the site's player ID column (like DKSlateID).`);
@@ -1460,10 +1460,15 @@ function importProjections(text, fileName, quiet) {
   save(); render();
   notify(hit ? 'ok' : 'err', `Matched <b>${hit}</b> projection rows from ${esc(fileName)}.` + (miss.length ? ` Not on this slate: ${esc(miss.slice(0, 8).join(', '))}${miss.length > 8 ? ` and ${miss.length - 8} more` : ''}.` : ''));
 }
-function loadSlate(site, players, fileName) {
-  S.isBuiltin = false;
-  S.site = site; S.players = players; S.source = 'file'; S.fileName = fileName; S.gamesOff = new Set(); S.lineups = []; S.builtSite = null;
+// Fresh slate from a new upload: everything tied to the old players goes; Vegas lines and game times
+// stay (they are keyed by matchup, so they only apply where the same teams meet on the new slate).
+function freshSlate(site, players, fileName, tips) {
+  Object.assign(S, { isBuiltin: false, site, players, source: 'file', fileName, gamesOff: new Set(), lineups: [], builtSite: null, sim: null, bank: {}, whyOpen: null, lineupType: null });
+  S.gameTimes = Object.assign({}, S.gameTimes || {}, tips || {});
   save(); render();
+}
+function loadSlate(site, players, fileName, tips) {
+  freshSlate(site, players, fileName, tips);
   const site_ = SITES[site];
   notify('ok', `Loaded <b>${players.length}</b> players from ${esc(fileName)} as <b>${site_.label}</b>. Projections start at each player's season average. Import your own projections to replace them.`);
 }
