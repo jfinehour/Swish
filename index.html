@@ -21,6 +21,7 @@ img { max-width: 100%; }
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;1,700;1,800&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+[hidden] { display: none !important; }
 /* Layout: scorer's-table tool — slate pool on the left, controls rail on the right, results below. */
 :root {
   --m1: #0077C0; --m2: #5AA9DC; --m3: #9FB3C2; --m4: #C9D3DB;
@@ -357,7 +358,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <div class="field"><label for="uniq">Min unique</label><input type="number" id="uniq" min="1" max="9" value="2"></div>
         </div>
         <div class="field"><label for="rand">Randomness <output id="randOut">10%</output></label><input type="range" id="rand" min="0" max="40" step="1" value="10">
-          <span class="hint">Jitters each projection per lineup so builds don't all chase the same optimal.</span></div>
+          <span class="hint">Jitters each projection per lineup so builds don't all chase the same optimal. Projection (cash) builds skip it and list the top projected lineups in order.</span></div>
         <div class="two">
           <div class="field"><label for="maxTeam">Max per team</label><input type="number" id="maxTeam" min="1" max="8" placeholder="site max"></div>
           <div class="field"><label for="minSal">Min salary</label><input type="number" id="minSal" min="0" step="100" placeholder="none"></div>
@@ -454,10 +455,10 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
         <span class="hint" style="font-size:12px;color:var(--muted);margin-top:-8px">High totals swing together more, and big spreads raise the chance of a blowout that sits starters. Needs lines from the Optimizer tab.</span>
         <details class="adv"><summary>Correlation</summary>
           <div class="form">
-            <div class="field"><label for="paceCorr">Game pace <output id="gameOut">10%</output></label><input type="range" id="paceCorr" min="0" max="30" step="1" value="10">
-              <span class="hint">Pace and overtime lift everyone in a game, on both teams.</span></div>
-            <div class="field"><label for="usageCorr">Teammate usage competition <output id="teamOut">35%</output></label><input type="range" id="usageCorr" min="0" max="60" step="5" value="35">
-              <span class="hint">Teammates share one pool of shots, rebounds and assists: when one player has a big night, the others tend to give some back. At 35%, teammates' scores come out close to uncorrelated and opponents slightly positive, as in real NBA box scores.</span></div>
+            <div class="field"><label for="paceCorr">Game pace <output id="gameOut">5%</output></label><input type="range" id="paceCorr" min="0" max="20" step="1" value="5">
+              <span class="hint">Pace and overtime lift everyone in a game, on both teams. With Vegas lines on, high totals get more of it.</span></div>
+            <div class="field"><label for="usageCorr">Teammate competition <output id="teamOut">65%</output></label><input type="range" id="usageCorr" min="0" max="85" step="5" value="65">
+              <span class="hint">Each team's box score is a fixed pie split three ways: shots, rebounds and playmaking. A player's stake in each comes from his position, so two centers fight over the same boards and two lead guards over the same touches; when one has a big night, the players in his role give some back. At 65%, two centers on one team come out around −0.1 correlated, two ball-handlers around −0.05, a guard and a big near zero, and opponents around +0.07. Every game also draws a final margin: past 15 points, starters on both sides lose minutes to the bench.</span></div>
           </div>
         </details>
       </div>
@@ -506,7 +507,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v32</p>
+<p class="ver" id="ver">Swish v33</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -622,7 +623,9 @@ function* generate(siteKey, players, opts) {
   const site = SITES[siteKey];
   const N = opts.lineups;
   const counts = {}; const prev = []; const prevByKey = new Map();
-  const maxCount = k => opts.maxExp[k] != null ? Math.floor(opts.maxExp[k] / 100 * N + 1e-9) : N;
+  const lockSet = new Set(opts.locks || []);
+  // a cap always allows at least one lineup, and a locked player is in every lineup whatever the cap
+  const maxCount = k => lockSet.has(k) || opts.maxExp[k] == null ? N : Math.max(opts.maxExp[k] > 0 ? 1 : 0, Math.floor(opts.maxExp[k] / 100 * N + 1e-9));
   const minCount = k => opts.minExp[k] != null ? Math.ceil(opts.minExp[k] / 100 * N - 1e-9) : 0;
   const keys = [...new Set(players.map(p => p.key))];
   for (let n = 0; n < N; n++) {
@@ -714,67 +717,88 @@ function playerDist(p) {
 // Higher totals get more shared game variance; each replay draws a final margin around the
 // spread, and lopsided margins cut starters' minutes while bench players soak them up.
 // Each player's simulated average is then re-centered on his projection.
-// Correlation (NBA): a game-level shock for pace and overtime lifts both teams together (gameW), and a
-// usage shock is zero-sum within each team: when one player takes a bigger share of the possessions,
-// his teammates' shares shrink in proportion to their projections (usageW). Teammates therefore end up
-// near zero correlation and opponents mildly positive, as in real NBA box scores.
-async function simulateScores(players, { iters = 1000, seed = 1, teamW = 0, gameW = 0.10, usageW = 0.35, vegas = null, onProgress } = {}) {
+// Correlation (NBA): a team's box score is a fixed pie. Three zero-sum shares split it inside each
+// team: shots and points, rebounds, and playmaking. Each player's stake in each share comes from his
+// position (centers mostly rebounds, point guards more assists), so two centers fight over the same
+// boards and two lead guards over the same touches. The shares are weighted so they sum to exactly
+// zero fantasy points per team: when one player goes off, his teammates give some of it back.
+// A small game-level shock for pace and overtime lifts both teams together (gameW), and every game
+// draws a final margin (around the spread when Vegas lines are in): blowouts cut starters' minutes
+// on both sides and hand them to the bench. Each player's simulated average is then re-centered on
+// his projection.
+const ROLE = { PG: [0.40, 0.08, 0.52], SG: [0.62, 0.10, 0.28], SF: [0.62, 0.26, 0.12], PF: [0.40, 0.52, 0.08], C: [0.28, 0.68, 0.04] };
+var ROT_MIN = 10;
+var BLOW = { t: 15, s: 0.012, b: 0.02 }; // garbage time starts once the margin passes t points
+function roleMix(p) {
+  const ps = (p.pos || []).filter(x => ROLE[x]); if (!ps.length) return [0.50, 0.30, 0.20];
+  const m = [0, 0, 0]; ps.forEach(x => ROLE[x].forEach((v, k) => m[k] += v / ps.length)); return m;
+}
+async function simulateScores(players, { iters = 1000, seed = 1, teamW = 0, gameW = 0.05, usageW = 0.65, vegas = null, onProgress } = {}) {
   const rng = mulberry32(seed);
   const n = players.length, data = new Float32Array(iters * n);
   const dist = players.map(playerDist);
   const teams = [...new Set(players.map(p => p.team))], games = [...new Set(players.map(p => p.game))];
   const tIdx = players.map(p => teams.indexOf(p.team)), gIdx = players.map(p => games.indexOf(p.game));
   const tS = new Float64Array(teams.length), gS = new Float64Array(games.length);
-  // per-game variance weights and blowout setup
+  // per-game pace weight (scaled by the game total when lines are in) and the margin setup
   const gw2 = games.map(() => gameW);
-  const gInfo = games.map(() => null);
+  const gInfo = games.map(g => {
+    const ts = [...new Set(players.filter(p => p.game === g).map(p => p.team))];
+    return { teamA: teams.indexOf(ts[0]), teamB: ts[1] != null ? teams.indexOf(ts[1]) : -1, mean: 0 };
+  });
   if (vegas) {
     const tot = games.map(g => { const t = players.find(p => p.game === g); const v = t && vegas[t.team]; return v && v.total ? v.total : null; });
     const known = tot.filter(x => x); const avg = known.length ? known.reduce((a, b) => a + b, 0) / known.length : 0;
     games.forEach((g, gi) => {
-      if (tot[gi] && avg) gw2[gi] = Math.min(0.32, Math.max(0.06, gameW * Math.pow(tot[gi] / avg, 3)));
-      const ps = players.filter(p => p.game === g); const tA = ps[0] && ps[0].team; const v = tA && vegas[tA];
-      if (v && v.spread != null) gInfo[gi] = { teamA: teams.indexOf(tA), teamB: teams.indexOf(v.opp), mean: -v.spread };
+      if (tot[gi] && avg) gw2[gi] = Math.min(0.15, Math.max(0.02, gameW * Math.pow(tot[gi] / avg, 3)));
+      const v = vegas[teams[gInfo[gi].teamA]]; if (v && v.spread != null) gInfo[gi].mean = -v.spread;
     });
   }
   // starters = each team's top five projections
   const starter = new Uint8Array(n);
   for (const t of teams) players.map((p, i) => [p, i]).filter(([p]) => p.team === t).sort((x, y) => y[0].proj - x[0].proj).slice(0, 5).forEach(([, i]) => starter[i] = 1);
   const margin = new Float64Array(games.length);
-  // usage shares within each team and the variance that normalizes each player's usage shock
-  const share = new Float64Array(n), uNorm = new Float64Array(n), tShareSq = new Float64Array(teams.length), tProj = new Float64Array(teams.length);
-  players.forEach((p, i) => { tProj[tIdx[i]] += Math.max(0, p.proj || 0); });
-  players.forEach((p, i) => { share[i] = tProj[tIdx[i]] ? Math.max(0, p.proj || 0) / tProj[tIdx[i]] : 0; tShareSq[tIdx[i]] += share[i] * share[i]; });
-  players.forEach((p, i) => { uNorm[i] = 1 / Math.sqrt(Math.max(0.05, 1 - 2 * share[i] + tShareSq[tIdx[i]])); });
-  const eU = new Float64Array(n), tMean = new Float64Array(teams.length);
+  // Zero-sum shares: player i's stake a[i][k] in share k, and weights w[i][k] = a·s / Σ(a·s) on his team,
+  // so the share moves Σ s·a·(e − Σ w·e) = 0 fantasy points per team. a is solved so each player's
+  // share variance equals usageW split by his role mix.
+  // Only the rotation (projected 10+) splits the shares; deep-bench players keep their own swings
+  // so their long-shot ranges don't soak up the give-back.
+  const K = 3, s = dist.map((d, i) => (players[i].proj || 0) >= ROT_MIN ? (d.lo + d.hi) / 2 : 0), mix = players.map(roleMix);
+  const a = new Float64Array(n * K), w = new Float64Array(n * K), tSum = new Float64Array(teams.length * K), tW2 = new Float64Array(teams.length * K);
+  for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) a[i * K + k] = s[i] ? Math.sqrt(usageW * mix[i][k]) : 0;
+  for (let pass = 0; pass < 4; pass++) {
+    tSum.fill(0); tW2.fill(0);
+    for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) tSum[tIdx[i] * K + k] += a[i * K + k] * s[i];
+    for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) { const T = tSum[tIdx[i] * K + k]; w[i * K + k] = T ? a[i * K + k] * s[i] / T : 0; tW2[tIdx[i] * K + k] += w[i * K + k] ** 2; }
+    for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) a[i * K + k] = s[i] ? Math.sqrt(usageW * mix[i][k] / Math.max(0.05, 1 - 2 * w[i * K + k] + tW2[tIdx[i] * K + k])) : 0;
+  }
+  const e = new Float64Array(n * K), tMean = new Float64Array(teams.length * K);
+  const iw = gIdx.map((g, i) => Math.sqrt(Math.max(0, 1 - teamW - gw2[g] - (s[i] ? usageW : 0))));
   let last = performance.now();
   for (let it = 0; it < iters; it++) {
     for (let t = 0; t < teams.length; t++) tS[t] = zOf(rng);
     for (let g = 0; g < games.length; g++) gS[g] = zOf(rng);
     for (let g = 0; g < games.length; g++) {
-      const G = gInfo[g]; if (!G) { margin[g] = 0; continue; }
+      const G = gInfo[g];
       const tilt = G.teamB >= 0 ? (tS[G.teamA] - tS[G.teamB]) / Math.SQRT2 : 0;
       margin[g] = G.mean + 12 * (0.45 * tilt + 0.893 * zOf(rng)); // margin from team A's side
     }
     const o = it * n;
-    if (usageW > 0) { tMean.fill(0); for (let i = 0; i < n; i++) { eU[i] = zOf(rng); tMean[tIdx[i]] += share[i] * eU[i]; } }
+    if (usageW > 0) { tMean.fill(0); for (let i = 0; i < n; i++) for (let k = 0; k < K; k++) { const x = zOf(rng); e[i * K + k] = x; tMean[tIdx[i] * K + k] += w[i * K + k] * x; } }
     for (let i = 0; i < n; i++) {
       const d = dist[i]; if (!d.m) { data[o + i] = 0; continue; }
-      const gw = gw2[gIdx[i]], iw = Math.sqrt(Math.max(0, 1 - teamW - gw - usageW));
-      let z = iw * zOf(rng) + Math.sqrt(gw) * gS[gIdx[i]];
+      let z = iw[i] * zOf(rng) + Math.sqrt(gw2[gIdx[i]]) * gS[gIdx[i]];
       if (teamW > 0) z += Math.sqrt(teamW) * tS[tIdx[i]];
-      if (usageW > 0) z += Math.sqrt(usageW) * (eU[i] - tMean[tIdx[i]]) * uNorm[i];
+      if (usageW > 0) for (let k = 0; k < K; k++) z += a[i * K + k] * (e[i * K + k] - tMean[tIdx[i] * K + k]);
       const raw = z < 0 ? d.m + z * d.lo : d.m + z * d.hi;
       let v = Math.max(0, raw - d.bias);
-      if (gInfo[gIdx[i]]) {
-        const over = Math.abs(margin[gIdx[i]]) - 12;
-        if (over > 0) v *= starter[i] ? 1 - Math.min(0.3, 0.015 * over) : 1 + Math.min(0.45, 0.025 * over);
-      }
+      const over = Math.abs(margin[gIdx[i]]) - BLOW.t;
+      if (over > 0) v *= starter[i] ? 1 - Math.min(0.3, BLOW.s * over) : 1 + Math.min(0.45, BLOW.b * over);
       data[o + i] = v;
     }
     if (performance.now() - last > 40) { onProgress && onProgress(it / iters); await tick(); last = performance.now(); }
   }
-  if (vegas) for (let i = 0; i < n; i++) { // keep each player's average on his projection
+  for (let i = 0; i < n; i++) { // keep each player's average on his projection
     if (!dist[i].m) continue; let sum = 0; for (let it = 0; it < iters; it++) sum += data[it * n + i];
     const f = sum > 0 ? dist[i].m * iters / sum : 1; for (let it = 0; it < iters; it++) data[it * n + i] *= f;
   }
@@ -1590,6 +1614,8 @@ function save() {
 function restore() {
   S.bank = store.get('bank') || {};
   const st = store.get('settings');
+  // correlation sliders were re-based in v33 (role-share model); older saved values don't carry over
+  if (st && st.corrModel !== 2) { delete st.paceCorr; delete st.usageCorr; }
   if (st) for (const [k, v] of Object.entries(st)) { const el = document.getElementById(k); if (!el || v == null) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
   const s = store.get('slate');
   if (s && s.players && s.players.length && SITES[s.site]) { Object.assign(S, s, { gamesOff: new Set(s.gamesOff || []) }); }
@@ -1606,7 +1632,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr') };
+    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2 };
 }
 
 // ===== notices =====
@@ -1792,7 +1818,7 @@ async function build() {
   building = true; $('#buildBtn').disabled = true; $('#buildBtn').textContent = 'Building…';
   const out = []; const t0 = performance.now(); let err = null;
   try {
-    const gen = generate(S.site, players, { lineups: N, uniq, rand: st.rand || 0, minSal: minSal || 0, maxOwn: st.maxOwn || 0, maxTeam: st.maxTeam || 0, locks, excl: [], minExp, maxExp });
+    const gen = generate(S.site, players, { lineups: N, uniq, rand: type === 'proj' ? 0 : (st.rand || 0), minSal: minSal || 0, maxOwn: st.maxOwn || 0, maxTeam: st.maxTeam || 0, locks, excl: [], minExp, maxExp });
     let last = performance.now();
     for (const r of gen) {
       if (r.error) { err = r.error; break; }
@@ -1802,6 +1828,8 @@ async function build() {
     }
   } catch (e) { err = 'The optimizer hit an error: ' + e.message; }
   building = false; $('#buildBtn').disabled = false; $('#buildBtn').textContent = 'Build lineups';
+  // Projection (cash) builds read top-down: best projected lineup first
+  if (type === 'proj') { const tot = l => l.reduce((a, p) => a + (p.proj || 0) * boostF(p), 0); out.sort((a, b) => tot(b) - tot(a)); }
   if (out.length) S.bank = Object.assign(S.bank || {}, bankBase(), { opt: out.map(l => l.map(p => p.key)), optType: type, optAt: Date.now() });
   S.lineups = out; S.builtSite = S.site; S.lineupType = type; S.lineupSt = { ceilW: st.ceilW, smallFade: st.smallFade, largeFade: st.largeFade }; S.tab = S.tab || 'lineups'; if (S.sim) S.sim.mineStale = true;
   $('#buildMsg').textContent = out.length ? `Built ${out.length} lineup${out.length === 1 ? '' : 's'} in ${((performance.now() - t0) / 1000).toFixed(2)}s.` : 'No lineups built.';
@@ -2141,7 +2169,7 @@ async function runSim(mode, lineupsOverride) {
     // confidence pulls unboosted projections toward salary value; your boosts then apply in full
     const simPool = truthPool(fieldPool, (st.projConf ?? 30) / 100).map(p => { const f = boostF(p); return f === 1 ? p : { ...p, proj: p.proj * f, ceil: p.ceil ? p.ceil * f : p.ceil }; });
     const runSeed = Math.floor(Math.random() * 1e9);
-    const sim = await simulateScores(simPool, { iters, seed: runSeed, teamW: 0, gameW: (st.paceCorr ?? 10) / 100, usageW: (st.usageCorr ?? 35) / 100, vegas: vmap, onProgress: prog('sim') });
+    const sim = await simulateScores(simPool, { iters, seed: runSeed, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap, onProgress: prog('sim') });
     let opt = null;
     if (st.doOpt) {
       msg('Finding the optimal lineup in each replay…');
@@ -2260,7 +2288,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   const passSims = [sim], passFields = [field];
   for (let pp = 1; pp < P; pp++) {
     msg(`Stage 1 of 3: preparing pass ${pp + 1} of ${P}…`);
-    passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: 0, gameW: (st.paceCorr ?? 10) / 100, usageW: (st.usageCorr ?? 35) / 100, vegas: vmap }));
+    passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap }));
     passFields.push(await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
   }
   const evalMany = async (keys, from, to) => {
@@ -2351,7 +2379,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   // picks are then ordered by that check, since the search ranking carries its own luck.
   msg(`Stage 3 of 3: re-testing the ${picked.length} picks${mineNow.length ? ' and your lineups' : ''} on a fresh field and fresh replays…`);
   const oosField = await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 99, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: f => simProgress({ from: 88, to: 92 }, f) });
-  const simC = await simulateScores(simPool, { iters: Math.min(4000, iters * 3), seed: runSeed + 202, teamW: 0, gameW: (st.paceCorr ?? 10) / 100, usageW: (st.usageCorr ?? 35) / 100, vegas: vmap });
+  const simC = await simulateScores(simPool, { iters: Math.min(4000, iters * 3), seed: runSeed + 202, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap });
   const both = await contestSimMulti(S.site, simC, keysOf(picked.map(x => x.l).concat(mineNow)), oosField, contests, f => simProgress({ from: 92, to: 100 }, f));
   let val = both.slice(0, picked.length); const mineVal = both.slice(picked.length);
   const ord = picked.map((_, i) => i).sort((i, j) => score(val[j]) - score(val[i]));
