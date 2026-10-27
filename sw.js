@@ -1,6 +1,6 @@
 // Swish offline support. Pages load from the network first so updates show up
 // right away; the cached copy is used only when the device is offline.
-const CACHE = 'swish-v33';
+const CACHE = 'swish-v34';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/maskable-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
@@ -10,7 +10,9 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET') return;
+  // Only this site's own files are cached. Outside calls (The Odds API, fonts) always go to the
+  // network, so a line pull never gets an old saved response.
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   const isPage = req.mode === 'navigate' || /\/(index\.html)?$/.test(new URL(req.url).pathname);
   if (isPage) {
     e.respondWith(fetch(req, { cache: 'no-store' }).then(res => {

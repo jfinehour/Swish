@@ -507,7 +507,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v33</p>
+<p class="ver" id="ver">Swish v34</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1185,7 +1185,7 @@ async function pullVegas() {
   $('#pullOdds').disabled = true; vegasMsg('Pulling lines…');
   try {
     const url = `https://api.the-odds-api.com/v4/sports/basketball_nba/odds?apiKey=${encodeURIComponent(key)}&regions=us&markets=spreads,totals&oddsFormat=american`;
-    const res = await fetch(url);
+    const res = await fetch(url, { cache: 'no-store' });
     const left = res.headers.get('x-requests-remaining');
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -1193,7 +1193,7 @@ async function pullVegas() {
       return vegasMsg(why, 'err');
     }
     const events = await res.json();
-    const games = slateGames(); let matched = 0; S.vegas = S.vegas || {};
+    const games = slateGames(); let matched = 0, kept = 0; S.vegas = S.vegas || {}; const now = Date.now();
     for (const g of games) {
       const want = pairKey(g.teams[0], g.teams[1]);
       const ev = events.filter(e => NBA_TEAMS[e.home_team] && NBA_TEAMS[e.away_team] && pairKey(NBA_TEAMS[e.home_team], NBA_TEAMS[e.away_team]) === want)
@@ -1205,12 +1205,15 @@ async function pullVegas() {
         if (mk.key === 'spreads') { const o = mk.outcomes.find(o => o.name === ev.home_team); if (o && o.point != null) spreads.push(o.point); }
       }
       if (!totals.length && !spreads.length) continue;
+      // Once a game has tipped, books post live in-game lines. Keep the pre-game line if we have one.
+      const tip = ev.commence_time ? Date.parse(ev.commence_time) : null, prev = S.vegas[want];
+      if (tip && tip <= now && prev && (prev.src === 'manual' || (prev.at && prev.at < tip))) { kept++; matched++; continue; }
       S.gameTimes = S.gameTimes || {}; if (ev.commence_time) S.gameTimes[want] = Date.parse(ev.commence_time);
       S.vegas[want] = { home: NBA_TEAMS[ev.home_team], away: NBA_TEAMS[ev.away_team], total: median(totals), homeSpread: median(spreads), books: (ev.bookmakers || []).length, src: 'api', at: Date.now() };
       matched++;
     }
     save(); render();
-    vegasMsg(`Matched ${matched} of ${games.length} games (consensus of US sportsbooks).${left != null ? ` ${left} API credits left.` : ''}${matched < games.length ? ' Lines may not be posted yet for the rest; you can type them in.' : ''}`, matched ? 'ok' : 'err');
+    vegasMsg(`Matched ${matched} of ${games.length} games (consensus of US sportsbooks).${kept ? ` ${kept} already tipped off, so their pre-game lines were kept.` : ''}${left != null ? ` ${left} API credits left.` : ''}${matched < games.length ? ' Lines may not be posted yet for the rest; you can type them in.' : ''}`, matched ? 'ok' : 'err');
   } catch (e) {
     vegasMsg(window.claude ? 'Lines can\'t be pulled inside the Claude preview because outside connections are blocked here. Use the installed app at jfinehour.github.io/Swish, or type the lines in below.' : 'Couldn\'t reach The Odds API. Check your connection and try again, or type the lines in below.', 'err');
   } finally { $('#pullOdds').disabled = false; }
