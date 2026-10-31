@@ -471,14 +471,19 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
       <section class="panel" aria-label="Sim-built lineups">
       <div class="panel-h"><h2>Sim-built lineups</h2></div>
       <div class="form">
-        <span class="hint" style="font-size:12.5px;color:var(--muted)">Swish builds a pool of candidate lineups, runs every one through the contests above, and keeps the ones with the best results. The picks are then re-scored on a fresh set of replays, so their numbers aren't inflated by luck.</span>
+        <span class="hint" style="font-size:12.5px;color:var(--muted)">Swish builds a pool of candidate lineups, runs every one through the selected contest, improves the best with simulation-checked swaps, and keeps a diversified set. The picks are then re-scored on fresh replays so their numbers aren't inflated by luck.</span>
         <div class="two">
           <div class="field"><label for="bestN">Lineups to keep</label><input type="number" id="bestN" min="1" max="150" value="20"></div>
-          <div class="field"><label for="candN">Candidates</label><select id="candN" class="sel"><option value="150">150 (fast)</option><option value="300" selected>300</option><option value="600">600 (slow)</option></select></div>
+          <div class="field"><label for="sbStack">Max stack size</label><input type="number" id="sbStack" min="2" max="8" value="4"></div>
         </div>
-        <div class="field"><label for="passes">Stability</label><select id="passes" class="sel"><option value="1" selected>1 pass (fastest)</option><option value="3">3 passes (about 2x slower)</option><option value="5">5 passes (about 3x slower)</option></select>
-          <span class="hint">Each extra pass scores candidates against another opponent field and another set of replays, then averages, so picks change less between runs.</span></div>
-        <div class="field"><label for="rankBy">Pick by</label><select id="rankBy" class="sel"><option value="blend">Balanced: cash rate + robust ROI</option><option value="roi">Robust ROI</option><option value="cash">Cash rate</option><option value="top1">Top 1% rate</option></select></div>
+        <div class="field"><label for="sbBreadth">Search breadth</label><select id="sbBreadth" class="sel"><option value="normal" selected>Normal</option><option value="wide">Wide (off-the-board lineups, slower)</option></select>
+          <span class="hint">Wide adds random-weight builds, contrarian stacks, sim-guided builds, this run's sim-optimal lineups and two-player swaps.</span></div>
+        <div class="field"><label for="passes">Stability</label><select id="passes" class="sel"><option value="1" selected>1 pass (fastest)</option><option value="3">3 passes (about 3x slower)</option><option value="5">5 passes (about 5x slower)</option></select>
+          <span class="hint">Each extra pass builds more candidates and scores them against another opponent field and another set of replays, then averages.</span></div>
+        <div class="field"><label for="rankBy">Pick by</label><select id="rankBy" class="sel"><option value="roi" selected>ROI</option><option value="top1">Top 1% rate</option><option value="win">Win rate</option><option value="cash">Cash rate</option><option value="true">True ROI (uncapped, dupes split)</option><option value="winAdj">Win rate (dupe-adjusted)</option></select>
+          <span class="hint">ROI and Win rate pay each finish as if no one else entered your exact lineup; the dupe versions split prizes with the field's copies of it, as the results table does.</span></div>
+        <div class="field"><span class="flabel">Teams to stack</span><div class="chips" id="sbTeams"></div>
+          <span class="hint">Pick teams to make every lineup carry at least 3 players from one of them. Max stack size caps how many any one team can have.</span></div>
         <span class="hint" style="font-size:12px;color:var(--muted)">Follows your Optimizer locks, excludes, max per team, min salary, min unique and max exposure.</span>
       </div>
       <div class="build"><button class="btn primary" id="bestBtn">Build best simmed lineups</button></div>
@@ -507,7 +512,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v34</p>
+<p class="ver" id="ver">Swish v35</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1082,8 +1087,9 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress, 
   const sigOf = keys => sd ? keys[0] + '|' + keys.slice(1).sort().join(',') : keys.slice().sort().join(',');
   const fieldSig = new Map(); field.lineups.forEach((l, j) => { const g = sigOf(l.keys); fieldSig.set(g, (fieldSig.get(g) || 0) + fw[j]); });
   const mCols = mine.map(l => l.map(k => sim.idx.get(k)));
+  const mDup = mine.map(l => fieldSig.get(sigOf(l)) || 0); // share of the field holding this exact lineup
   const M = mine.length, F = fCols.length, N = sim.iters;
-  const res = mine.map(l => ({ scores: new Float32Array(N), c: CS.map(() => ({ payCap: 0, payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0, bk: { win: 0, top1: 0, top10: 0, cash: 0 }, topN: 0, topSum: new Float64Array(l.length) })) }));
+  const res = mine.map(l => ({ scores: new Float32Array(N), c: CS.map(() => ({ paySolo: 0, winSolo: 0, payCap: 0, payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0, bk: { win: 0, top1: 0, top10: 0, cash: 0 }, topN: 0, topSum: new Float64Array(l.length) })) }));
   const fs = new Float64Array(F), order = new Uint32Array(F), cum = new Float64Array(F);
   let last = performance.now();
   for (let it = 0; it < N; it++) {
@@ -1115,6 +1121,9 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress, 
         const rank = Math.floor(above) + 1, rankEnd = Math.max(rank, Math.round(above + tied) + 1);
         const p = payRange(C, rank, rankEnd);
         r.rankSum += rank; r.payout += p;
+        // 'solo' payout: as if nobody else entered this exact lineup (ties with other lineups still split)
+        const soloEnd = Math.max(rank, Math.round(above + Math.max(0, tied - mDup[m] * C.E)) + 1);
+        r.paySolo += payRange(C, rank, soloEnd); if (above < 0.5) r.winSolo += 1 / Math.max(1, soloEnd - rank + 1);
         // robust payout: any finish better than the top 0.1% is paid as if it landed exactly there
         r.payCap += rank >= C.capRank ? p : payRange(C, C.capRank, Math.max(C.capRank, rankEnd + C.capRank - rank));
         if (rank <= C.paidMax) r.cash++;
@@ -1129,7 +1138,7 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress, 
     const s = Array.from(R.scores).sort((a, b) => a - b); const q = x => s[Math.min(N - 1, Math.floor(x * N))];
     const dupW = fieldSig.get(sigOf(mine[m])) || 0;
     return { mean: s.reduce((a, b) => a + b, 0) / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), p99: q(0.99),
-      c: R.c.map((r, ci) => { const avgPay = r.payout / N, fee = CS[ci].fee; return { avgPay, roi: fee ? (avgPay - fee) / fee * 100 : 0, roiCap: fee ? (r.payCap / N - fee) / fee * 100 : 0,
+      c: R.c.map((r, ci) => { const avgPay = r.payout / N, fee = CS[ci].fee; return { avgPay, roi: fee ? (avgPay - fee) / fee * 100 : 0, roiCap: fee ? (r.payCap / N - fee) / fee * 100 : 0, roiSolo: fee ? (r.paySolo / N - fee) / fee * 100 : 0, winSolo: r.winSolo / N * 100,
         cash: r.cash / N * 100, top1: r.top1 / N * 100, win: r.win / N * 100, avgRank: r.rankSum / N,
         bk: { win: r.bk.win / N, top1: r.bk.top1 / N, top10: r.bk.top10 / N, cash: r.bk.cash / N },
         dups: dupW * CS[ci].E, topN: r.topN, topAvg: r.topN ? Array.from(r.topSum, x => x / r.topN) : null }; }) };
@@ -1619,6 +1628,7 @@ function restore() {
   const st = store.get('settings');
   // correlation sliders were re-based in v33 (role-share model); older saved values don't carry over
   if (st && st.corrModel !== 2) { delete st.paceCorr; delete st.usageCorr; }
+  if (st) { S.sbTeams = Array.isArray(st.sbTeams) ? st.sbTeams : []; delete st.sbTeams; if (!['roi', 'top1', 'win', 'cash', 'true', 'winAdj'].includes(st.rankBy)) st.rankBy = 'roi'; }
   if (st) for (const [k, v] of Object.entries(st)) { const el = document.getElementById(k); if (!el || v == null) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
   const s = store.get('slate');
   if (s && s.players && s.players.length && SITES[s.site]) { Object.assign(S, s, { gamesOff: new Set(s.gamesOff || []) }); }
@@ -1635,7 +1645,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, candN: $('#candN').value, rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2 };
+    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, sbStack: num('sbStack'), sbBreadth: $('#sbBreadth').value, sbTeams: (S.sbTeams || []).slice(), rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2 };
 }
 
 // ===== notices =====
@@ -2250,104 +2260,189 @@ function truthPool(pool, conf) {
 async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries }) {
   const sd = !!site.showdown;
   const sigOf = l => sd ? l[0].key + '|' + l.slice(1).map(p => p.key).sort().join(',') : l.map(p => p.key).sort().join(',');
-  const C = Math.max(30, +st.candN || 300), N = Math.max(1, Math.min(150, Math.round(st.bestN || 20)));
+  const N = Math.max(1, Math.min(150, Math.round(st.bestN || 20)));
   const poolKeys = new Set(pool.map(p => p.key));
-  const locks = S.players.filter(p => p.lock && poolKeys.has(p.key)).map(p => p.key);
-  const mkRows = f => { const rows = []; for (const p of pool) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: f(p), own: p.own || 0, src: p }; if (sd) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); } return rows; };
-  const recipes = [
-    { n: Math.round(C * 0.2), rows: mkRows(p => p.proj), rand: 2 },
-    { n: Math.round(C * 0.2), rows: mkRows(p => p.proj), rand: 8 },
-    { n: Math.round(C * 0.15), rows: mkRows(p => p.proj), rand: 15 },
-    { n: Math.round(C * 0.1), rows: mkRows(p => buildScore(p, st, 'ceil')), rand: 8 },
-    { n: Math.round(C * 0.15), rows: mkRows(p => buildScore(p, st, 'small')), rand: 8 },
-    { n: Math.round(C * 0.1), rows: mkRows(p => buildScore(p, st, 'large')), rand: 8 },
-  ];
-  const cand = new Map(); let done = 0, last = performance.now();
-  msg(`Building ${C} candidate lineups…`);
-  for (const rc of recipes) {
-    for (const r of generate(S.site, rc.rows, { lineups: rc.n, uniq: 2, rand: rc.rand, locks, excl: [], minExp: {}, maxExp: {}, maxTeam: st.maxTeam || 0, minSal: st.minSal || 0, nodeLimit: 3e5, rng: mulberry32(31 + recipes.indexOf(rc)) })) {
-      if (r.error) break; const l = r.lineup.map(x => x.src); const g = sigOf(l); if (!cand.has(g)) cand.set(g, l);
-      done++; if (performance.now() - last > 40) { simProgress({ from: 45, to: 62 }, done / C); await tick(); last = performance.now(); }
+  const locks = S.players.filter(p => p.lock && poolKeys.has(p.key)).map(p => p.key), lockSet = new Set(locks);
+  // Gridlock's sim-built settings: max stack, teams to stack, search breadth, stability, pick by
+  const wide = st.sbBreadth === 'wide';
+  const P = Math.max(1, Math.min(5, +st.passes || 1));
+  const maxStack = Math.max(2, Math.min(site.maxTeam, Math.round(st.sbStack ?? (sd ? 5 : 4))));
+  const maxTeam = Math.min(site.maxTeam, st.maxTeam || 99, maxStack);
+  const allowed = (st.sbTeams || []).filter(t => pool.some(p => p.team === t)), allowedSet = allowed.length ? new Set(allowed) : null;
+  const STACK_MIN = 3; // with teams picked, every lineup carries at least 3 players from one of them
+  const ownL = p => p.ownLarge != null ? p.ownLarge : (p.own || 0);
+  const cw = (st.ceilW ?? 100) / 100, blend = p => cw * (p.ceil || p.proj * 1.2) + (1 - cw) * p.proj;
+  const levBy = fade => p => blend(p) * Math.max(0.05, 1 - fade * ownL(p) / 100);
+  const largeFade = (st.largeFade ?? 55) / 100;
+  const mkRows = (f, sub) => { const rows = []; for (const p of (sub || pool)) { const r = { key: p.key, name: p.name, pos: p.pos, team: p.team, game: p.game, proj: Math.max(0.01, f(p)), own: p.own || 0, src: p }; if (sd) rows.push({ ...r, cpt: true, salary: p.cptSalary }); rows.push({ ...r, salary: p.salary }); } return rows; };
+  const hallC = sd ? [] : hallConstraints(site);
+  const valid = l => {
+    if (new Set(l.map(p => p.key)).size !== l.length) return false;
+    const sal = l.reduce((a, p, j) => a + (sd && j === 0 ? p.cptSalary : p.salary), 0); if (sal > site.cap || sal < (st.minSal || 0)) return false;
+    const tc = {}; for (const p of l) { tc[p.team] = (tc[p.team] || 0) + 1; if (tc[p.team] > maxTeam) return false; }
+    if (Object.keys(tc).length < site.minTeams) return false;
+    if (allowedSet && !Object.entries(tc).some(([t, n]) => n >= STACK_MIN && allowedSet.has(t))) return false;
+    if (site.minGames > 1 && new Set(l.map(p => p.game)).size < site.minGames) return false;
+    for (const h of hallC) if (l.filter(p => posMask(p.pos) & h.mask).length < h.need) return false;
+    return locks.every(k => l.some(p => p.key === k));
+  };
+  const cand = new Map(); // sig -> { l, src }
+  const add = (l, src) => { if (!valid(l)) return false; const g = sigOf(l); if (cand.has(g)) return false; cand.set(g, { l: sd ? l : fixSlots(site, l), src }); return true; };
+  // top players of a team, for stack locks
+  const teamTop = (t, f, k) => pool.filter(p => p.team === t && !p.excl).sort((a, b) => f(b) - f(a)).slice(0, k);
+  let made = 0, last = performance.now(); const est = wide ? 2400 * P + 700 : 2000 * P;
+  const run = async (rows, n, rand, seed, src, extraLocks) => {
+    const lk = [...new Set([...locks, ...(extraLocks || [])])];
+    for (const r of generate(S.site, rows, { lineups: n, uniq: 2, rand, locks: lk, excl: [], minExp: {}, maxExp: {}, maxTeam, minSal: st.minSal || 0, nodeLimit: 2e5, rng: mulberry32(seed) })) {
+      if (r.error) break; add(r.lineup.map(x => x.src), src);
+      if (++made && performance.now() - last > 40) { simProgress({ from: 45, to: 60 }, Math.min(1, made / est)); await tick(); last = performance.now(); }
+    }
+  };
+  // with teams picked, builds go out in small batches, each locking 3 of one picked team's top players
+  const runT = async (rows, n, rand, seed, src, f) => {
+    if (!allowedSet) return run(rows, n, rand, seed, src);
+    const rr = mulberry32(seed + 17);
+    for (let b = 0; b * 10 < n; b++) {
+      const t = allowed[b % allowed.length], top = teamTop(t, f || blend, 6);
+      const pick = top.slice().sort(() => rr() - 0.5).slice(0, Math.min(STACK_MIN, maxStack));
+      await run(rows, Math.min(10, n - b * 10), rand, seed + 101 * b, src, pick.map(p => p.key));
+    }
+  };
+  msg('Building a broad candidate pool…');
+  const chalk = pool.filter(p => ownL(p) >= 20 && !lockSet.has(p.key)).sort((a, b) => ownL(b) - ownL(a)).slice(0, 14);
+  const topProj = Math.max(...pool.map(p => p.proj));
+  const stackTeams = allowedSet ? allowed : [...new Set(pool.filter(p => p.proj >= 0.6 * topProj).map(p => p.team))];
+  for (let pp = 0; pp < P; pp++) {
+    const s0 = 31 + pp * 1000;
+    // leverage builds with your Large Field fade, then a heavier full-ownership fade (true leverage builds)
+    await runT(mkRows(levBy(largeFade)), 150, 8, s0, 'base');
+    await runT(mkRows(levBy(1)), 150, 8, s0 + 46, 'base', levBy(1));
+    // chalk exclusion: each 20%+ owned player removed in turn, so no-chalk lineups get scored too
+    for (let ci = 0; ci < chalk.length; ci++) await runT(mkRows(levBy(largeFade), pool.filter(q => q.key !== chalk[ci].key)), 20, 8, s0 + 59 + ci, 'base');
+    // team stacks of 2 and 3 for every team with a top player (Gridlock's QB stacks)
+    for (let ti = 0; ti < stackTeams.length; ti++) for (const size of [2, 3].filter(z => z <= maxStack)) {
+      const top = teamTop(stackTeams[ti], blend, size); if (top.length < size) continue;
+      await run(mkRows(levBy(largeFade)), 3, 8, s0 + 9 + ti * 7 + size, 'base', top.map(p => p.key));
     }
   }
-  if (opt) for (const x of opt.lineups.slice(0, Math.round(C * 0.1))) {
-    const l = x.rows.map(r => r.src); if (locks.every(k => l.some(p => p.key === k))) { const g = sigOf(l); if (!cand.has(g)) cand.set(g, l); }
+  if (wide) {
+    msg('Wide search: adding off-the-board candidates…');
+    const rr = mulberry32(4242 + Math.floor(Math.random() * 1e6));
+    // (1) random-weight builds: each batch gets its own random bonus or penalty per player, and a random 12% of players cut
+    for (let bi = 0; bi < (sd ? 14 : 28); bi++) {
+      const mult = new Map(), keep = pool.filter(p => lockSet.has(p.key) || rr() >= 0.12);
+      for (const p of keep) mult.set(p.key, Math.max(0.2, 1 + (rr() - 0.5) * 0.9));
+      await runT(mkRows(p => levBy(0.3)(p) * mult.get(p.key), keep), 10, 4, 5000 + bi * 13 + Math.floor(rr() * 1000), 'random');
+    }
+    // (5) contrarian stacks: the least-owned teams' best players, with a full ownership fade
+    if (!sd) {
+      const tOwn = t => { const top = teamTop(t, p => p.proj, 3); return top.reduce((a, p) => a + ownL(p), 0) / Math.max(1, top.length); };
+      const teams = (allowedSet ? allowed : [...new Set(pool.map(p => p.team))]).filter(t => teamTop(t, p => p.proj, 1)[0]?.proj >= 0.45 * topProj).sort((a, b) => tOwn(a) - tOwn(b)).slice(0, 8);
+      for (let ti = 0; ti < teams.length; ti++) for (const size of [2, 3].filter(z => z <= maxStack)) await run(mkRows(levBy(1)), 6, 8, 6000 + ti * 7 + size, 'contrarian', teamTop(teams[ti], blend, size).map(p => p.key));
+    }
+    // (3) seeds from the sim-optimal lineups found in this run
+    if (opt) for (const x of opt.lineups.slice(0, 60)) add(x.rows.map(r => r.src), 'optimal');
   }
+  // raw-projection builds last, at most as many as the leverage builds (they are chalk-heavy)
+  { const levCount = cand.size; let added = 0;
+    const raw = [[mkRows(p => p.proj), 60, 2], [mkRows(p => p.proj), 60, 8], [mkRows(p => p.ceil || p.proj * 1.2), 30, 8]];
+    for (let k = 0; k < raw.length && added < levCount; k++) { const n0 = cand.size; await runT(raw[k][0], raw[k][1], raw[k][2], 900 + k, 'base', raw[k][0] === raw[0][0] ? p => p.proj : null); added += cand.size - n0; } }
   // your current lineups compete too, so sim-built can never do worse than them by omission
   const poolBy = new Map(pool.map(p => [p.key, p])); const yours = new Set(); const mineNow = [];
   if (S.builtSite === S.site) for (const l0 of S.lineups) {
     const l = l0.map(p => poolBy.get(p.key)); if (l.some(x => !x)) continue;
-    const g = sigOf(l); if (!cand.has(g)) cand.set(g, l); yours.add(g); mineNow.push(l);
+    const g = sigOf(l); if (!cand.has(g) && valid(l)) cand.set(g, { l, src: 'yours' }); if (cand.has(g)) { yours.add(g); mineNow.push(l); }
   }
   const poolL = [...cand.values()];
-  if (!poolL.length) throw new Error('No candidate lineups fit your Optimizer settings.');
+  if (!poolL.length) throw new Error(allowedSet ? `No candidate lineups fit with ${STACK_MIN}+ players from ${allowed.join('/')} under your settings.` : 'No candidate lineups fit your Optimizer settings.');
   const keysOf = L => L.map(l => l.map(p => p.key));
-  const metric = ({ avgroi: 'roi' })[st.rankBy] || st.rankBy || 'blend';
-  // Stage 1: every candidate on the fixed-seed replays and field
-  msg(`Stage 1 of 3: scoring ${poolL.length} candidates in ${contests.length === 1 ? 'the contest' : `${contests.length} contests`}…`);
-  // Stability (as in Gridlock): each extra pass scores candidates against another field and another
-  // set of replays, and the results are averaged.
-  const P = Math.max(1, Math.min(5, +st.passes || 1));
+  const metric = ({ avgroi: 'roi', blend: 'roi' })[st.rankBy] || st.rankBy || 'roi';
+  msg(`Stage 1 of 3: scoring ${poolL.length.toLocaleString()} candidates in the contest simulation${P > 1 ? ` (${P} passes, each with its own field and replays)` : ''}…`);
   const passSims = [sim], passFields = [field];
   for (let pp = 1; pp < P; pp++) {
     msg(`Stage 1 of 3: preparing pass ${pp + 1} of ${P}…`);
     passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap }));
     passFields.push(await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
   }
+  const KS = ['roi', 'roiCap', 'roiSolo', 'cash', 'top1', 'win', 'winSolo', 'avgPay'];
   const evalMany = async (keys, from, to) => {
     let acc = null;
     for (let pp = 0; pp < P; pp++) {
       const r = await contestSimMulti(S.site, passSims[pp], keys, passFields[pp], contests, f => simProgress({ from: from + (to - from) * pp / P, to: from + (to - from) * (pp + 1) / P }, f));
-      if (!acc) acc = r; else r.forEach((x, i) => { const a = acc[i]; ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] += x[k]); a.c.forEach((c, ci) => ['roi', 'roiCap', 'cash', 'top1', 'win', 'avgPay'].forEach(k => c[k] += x.c[ci][k])); });
+      if (!acc) acc = r; else r.forEach((x, i) => { const a = acc[i]; ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] += x[k]); a.c.forEach((c, ci) => KS.forEach(k => c[k] += x.c[ci][k])); });
     }
-    if (P > 1) acc.forEach(a => { ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] /= P); a.c.forEach(c => ['roi', 'roiCap', 'cash', 'top1', 'win', 'avgPay'].forEach(k => c[k] /= P)); });
+    if (P > 1) acc.forEach(a => { ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] /= P); a.c.forEach(c => KS.forEach(k => c[k] /= P)); });
     return acc;
   };
-  const scr = await evalMany(keysOf(poolL), 62, 76);
-  // Scorer (as in Gridlock): z-scores across the pool of cash rate and robust ROI, the latter
-  // winsorized at the 5th/95th percentile, so no single lucky first place decides a pick.
+  const scr = await evalMany(keysOf(poolL.map(x => x.l)), 60, 74);
+  // Scorer (as in Gridlock): z-scores across the candidate pool. ROI is soft-winsorized at the 5th/95th
+  // percentile (beyond it a lineup still ranks by raw ROI at 15% weight, so the top isn't a tie);
+  // True ROI only at the 1st/99th. Win rate is zero for most lineups, so top 1% rate breaks ties.
   const zs = contests.map((c, ci) => {
     const st2 = xs => { const m = xs.reduce((a, v) => a + v, 0) / xs.length; const sd = Math.sqrt(xs.reduce((a, v) => a + (v - m) ** 2, 0) / xs.length) || 1; return { m, sd }; };
-    const rc = scr.map(r => r.c[ci].roiCap).sort((x, y) => x - y), lo = rc[Math.floor(rc.length * 0.05)], hi = rc[Math.floor(rc.length * 0.95)];
-    const clamp = v => Math.min(hi, Math.max(lo, v));
-    return { clamp, cash: st2(scr.map(r => r.c[ci].cash)), roi: st2(scr.map(r => clamp(r.c[ci].roiCap))), top1: st2(scr.map(r => r.c[ci].top1)) };
+    const soft = (k, q) => { const v = scr.map(r => r.c[ci][k]).sort((x, y) => x - y), lo = v[Math.floor(v.length * q)], hi = v[Math.min(v.length - 1, Math.floor(v.length * (1 - q)))]; return x => x > hi ? hi + 0.15 * (x - hi) : x < lo ? lo + 0.15 * (x - lo) : x; };
+    const cR = soft('roiSolo', 0.05), cT = soft('roi', 0.01);
+    return { cR, cT, roi: st2(scr.map(r => cR(r.c[ci].roiSolo))), tru: st2(scr.map(r => cT(r.c[ci].roi))), cash: st2(scr.map(r => r.c[ci].cash)), top1: st2(scr.map(r => r.c[ci].top1)), win: st2(scr.map(r => r.c[ci].winSolo)), winA: st2(scr.map(r => r.c[ci].win)) };
   });
   const score = r => r.c.reduce((a, x, ci) => {
-    const Z = zs[ci], zc = (x.cash - Z.cash.m) / Z.cash.sd, zr = (Z.clamp(x.roiCap) - Z.roi.m) / Z.roi.sd, zt = (x.top1 - Z.top1.m) / Z.top1.sd;
-    return a + (metric === 'cash' ? zc : metric === 'roi' ? zr : metric === 'top1' ? zt : 0.5 * (zc + zr));
+    const Z = zs[ci], z = (v, s) => (v - s.m) / s.sd;
+    const zr = z(Z.cR(x.roiSolo), Z.roi), zt = z(Z.cT(x.roi), Z.tru), z1 = z(x.top1, Z.top1);
+    return a + (metric === 'cash' ? z(x.cash, Z.cash) : metric === 'top1' ? z1 : metric === 'win' ? z(x.winSolo, Z.win) + 0.02 * z1 : metric === 'true' ? zt : metric === 'winAdj' ? z(x.win, Z.winA) + 0.02 * zt : zr);
   }, 0) / r.c.length;
-  const items = poolL.map((l, i) => ({ l, r: scr[i], sc: score(scr[i]) }));
-  const sigs = new Set(poolL.map(sigOf));
-  // Stage 2: improve the 14 best with player swaps, checked in the same simulation (2 rounds)
-  const rng = mulberry32(777), lockSet = new Set(locks), maxTeam = Math.min(site.maxTeam, st.maxTeam || 99);
-  const hallC = sd ? [] : hallConstraints(site);
-  const valid = l => {
-    const sal = l.reduce((a, p, j) => a + (sd && j === 0 ? p.cptSalary : p.salary), 0); if (sal > site.cap || sal < (st.minSal || 0)) return false;
-    const tc = {}; for (const p of l) { tc[p.team] = (tc[p.team] || 0) + 1; if (tc[p.team] > maxTeam) return false; }
-    if (Object.keys(tc).length < site.minTeams) return false;
-    if (site.minGames > 1 && new Set(l.map(p => p.game)).size < site.minGames) return false;
-    for (const h of hallC) if (l.filter(p => posMask(p.pos) & h.mask).length < h.need) return false;
-    return locks.every(k => l.some(p => p.key === k));
-  };
-  const lev = q => q.proj * (1 - 0.5 * (q.own || 0) / 100);
+  const items = poolL.map((x, i) => ({ l: x.l, src: x.src, r: scr[i], sc: score(scr[i]) }));
+  const sigs = new Set(poolL.map(x => sigOf(x.l)));
+  if (wide) {
+    // (2) sim-guided: players whose candidates score above average get a bonus, and new lineups are built around them
+    msg('Wide search: building around players the simulation likes…');
+    const agg = new Map(); items.forEach(x => x.l.forEach(p => { const a = agg.get(p.key) || { s: 0, n: 0 }; a.s += x.sc; a.n++; agg.set(p.key, a); }));
+    const gb = p => { const a = agg.get(p.key); return a && a.n >= 5 ? 1 + Math.max(-0.4, Math.min(0.4, 0.25 * a.s / a.n)) : 1; };
+    const n0 = cand.size;
+    for (let gi = 0; gi < 3; gi++) await runT(mkRows(p => levBy(0.3)(p) * gb(p)), 50, 6, 8100 + gi, 'guided');
+    const fresh = [...cand.values()].slice(n0).filter(x => !sigs.has(sigOf(x.l)));
+    if (fresh.length) { fresh.forEach(x => sigs.add(sigOf(x.l))); const rr = await evalMany(keysOf(fresh.map(x => x.l)), 74, 76); fresh.forEach((x, k) => items.push({ l: x.l, src: 'guided', r: rr[k], sc: score(rr[k]) })); }
+  }
+  // Stage 2 (as in Gridlock): improve the best lineups with simulation-checked swaps, two rounds.
+  // Each slot tries position-matched pivots within $800 (best leverage, best projection, lowest owned),
+  // the overall leverage leaders and a few random players; Wide also tries two-player swaps.
+  const rng = mulberry32(777);
+  const lev = q => q.proj * (1 - 0.5 * ownL(q) / 100);
+  const salOf = (p, j) => sd && j === 0 ? p.cptSalary : p.salary;
+  const shares = (a, b) => sd || a.pos.some(x => b.pos.includes(x));
   const neighbors = l => {
     const inL = new Set(l.map(p => p.key)), out = [];
     l.forEach((p, i) => {
       if (lockSet.has(p.key)) return;
-      const elig = pool.filter(q => !inL.has(q.key) && q.proj > 0).sort((x, y) => lev(y) - lev(x));
-      const picks = elig.slice(0, 8), rest = elig.slice(8);
-      for (let k = 0; k < 5 && rest.length; k++) picks.push(rest.splice(Math.floor(rng() * rest.length), 1)[0]);
-      for (const q of picks) { const nx = l.slice(); nx[i] = q; if (valid(nx)) out.push(fixSlots(site, nx)); }
+      const elig = pool.filter(q => !inL.has(q.key) && q.proj > 0 && shares(q, p)); if (!elig.length) return;
+      const picks = []; const addP = q => { if (q && !picks.includes(q)) picks.push(q); };
+      const band = elig.filter(q => Math.abs(salOf(q, i) - salOf(p, i)) <= 800);
+      band.slice().sort((x, y) => lev(y) - lev(x)).slice(0, 5).forEach(addP);
+      band.slice().sort((x, y) => y.proj - x.proj).slice(0, 3).forEach(addP);
+      band.filter(q => q.proj >= 0.6 * p.proj).sort((x, y) => ownL(x) - ownL(y) || y.proj - x.proj).slice(0, 2).forEach(addP);
+      const byLev = elig.slice().sort((x, y) => lev(y) - lev(x)); byLev.slice(0, 4).forEach(addP);
+      const rest = byLev.slice(4).filter(q => !picks.includes(q));
+      for (let k = 0; k < 3 && rest.length; k++) addP(rest.splice(Math.floor(rng() * rest.length), 1)[0]);
+      for (const q of picks) { const nx = l.slice(); nx[i] = q; if (valid(nx)) out.push(sd ? nx : fixSlots(site, nx)); }
     });
+    if (wide) for (let k = 0; k < 12; k++) {
+      const i = Math.floor(rng() * l.length); let j = Math.floor(rng() * l.length); if (j === i) j = (j + 1) % l.length;
+      if (lockSet.has(l[i].key) || lockSet.has(l[j].key)) continue;
+      const nx = l.slice(), used = new Set(l.map(p => p.key)); let ok = true;
+      for (const ix of [i, j]) {
+        const p = l[ix], opts = pool.filter(q => !used.has(q.key) && q.proj > 0 && shares(q, p) && Math.abs(salOf(q, ix) - salOf(p, ix)) <= 1200);
+        if (!opts.length) { ok = false; break; }
+        const q = opts[Math.floor(rng() * opts.length)]; used.add(q.key); nx[ix] = q;
+      }
+      if (ok && valid(nx)) out.push(sd ? nx : fixSlots(site, nx));
+    }
     return out;
   };
   for (let round = 1; round <= 2; round++) {
-    const best = items.slice().sort((a, b) => b.sc - a.sc).slice(0, 14), fresh = [];
+    const best = items.slice().sort((a, b) => b.sc - a.sc).slice(0, wide ? 40 : 14), fresh = [];
     for (const x of best) for (const nb of neighbors(x.l)) { const g = sigOf(nb); if (!sigs.has(g)) { sigs.add(g); fresh.push(nb); } }
     if (!fresh.length) break;
-    msg(`Stage 2 of 3: testing ${fresh.length} player swaps on the best lineups (round ${round} of 2)…`);
+    msg(`Stage 2 of 3: improving the best lineups with ${fresh.length.toLocaleString()} simulation-checked player swaps (round ${round} of 2)…`);
     const rr = await evalMany(keysOf(fresh), 76 + (round - 1) * 6, 82 + (round - 1) * 6);
-    fresh.forEach((l, k) => items.push({ l, r: rr[k], sc: score(rr[k]) }));
+    fresh.forEach((l, k) => items.push({ l, src: wide ? 'wideswap' : 'swap', r: rr[k], sc: score(rr[k]) }));
   }
   const ranked = items.slice().sort((a, b) => b.sc - a.sc);
   // Selection (as in Gridlock): players with a min exposure are filled first, then picks go down the
@@ -2389,7 +2484,9 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   const lineups = ord.map(i => picked[i].l); val = ord.map(i => val[i]); const inSample = ord.map(i => picked[i].r);
   const avgOf = (arr, f) => arr.length ? arr.reduce((a, r) => a + f(r), 0) / arr.length : null;
   const roiAvg = r => r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, capAvg = r => r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length;
-  return { passes: P, mine: val, lineups, candidates: items.length, swaps: items.length - poolL.length, metric, wanted: N, skipped, relaxed,
+  const tally = xs => xs.reduce((m, x) => { const k = x.src || 'base'; m[k] = (m[k] || 0) + 1; return m; }, {});
+  return { passes: P, mine: val, lineups, candidates: items.length, swaps: items.filter(x => x.src === 'swap' || x.src === 'wideswap').length, metric, wanted: N, skipped, relaxed,
+    breadth: wide ? 'wide' : 'normal', maxStack, teams: allowed, srcCounts: tally(ord.map(i => picked[i])), srcPool: tally(items),
     fromYours: lineups.filter(l => yours.has(sigOf(l))).length, yoursCount: mineNow.length,
     screenRoi: avgOf(inSample, roiAvg), freshRoi: avgOf(val, roiAvg), freshCap: avgOf(val, capAvg), poolRoi: avgOf(scr, roiAvg), oosIters: Math.min(4000, iters * 3),
     mineFreshRoi: avgOf(mineVal, roiAvg), mineFreshCap: avgOf(mineVal, capAvg), mineFreshPer: contests.map((c, ci) => avgOf(mineVal, r => r.c[ci].roi)) };
@@ -2482,7 +2579,15 @@ function sortRows(rows, sort, get) {
 }
 const th = (k, t, sort, n = true) => `<th class="sortable${n ? ' n' : ''}" data-k="${k}"${sort.key === k ? ` data-dir="${sort.dir > 0 ? '▲' : '▼'}"` : ''}>${t}</th>`;
 
+// Teams to stack chips for sim-built (as in Gridlock): Any, or one or more of the slate's teams
+function renderSbTeams() {
+  const box = $('#sbTeams'); if (!box) return;
+  const teams = [...new Set(S.players.filter(p => !S.gamesOff.has(p.game) && p.proj > 0).map(p => p.team))].sort();
+  const sel = (S.sbTeams || []).filter(t => teams.includes(t));
+  box.innerHTML = `<button type="button" class="chip" data-sbt="*" aria-pressed="${!sel.length}">Any</button>` + teams.map(t => `<button type="button" class="chip" data-sbt="${esc(t)}" aria-pressed="${sel.includes(t)}">${esc(t)}</button>`).join('');
+}
 function renderSim() {
+  renderSbTeams();
   const site = SITES[S.site]; const R = S.sim;
   document.querySelectorAll('.views button').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === S.mainView));
   $('#optView').hidden = S.mainView !== 'opt'; $('#simView').hidden = S.mainView !== 'sim'; $('#luView').hidden = S.mainView !== 'lu';
@@ -2515,7 +2620,7 @@ function renderSim() {
     }
     const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
     if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${B.metric === 'top1' ? 'top 1% rate' : B.metric === 'cash' ? 'cash rate' : B.metric === 'roi' ? 'robust ROI' : 'a balance of cash rate and robust ROI'}</b>${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI', top1: 'top 1% rate', win: 'win rate', cash: 'cash rate', true: 'True ROI (uncapped, dupes split)', winAdj: 'win rate (dupe-adjusted)' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
     const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
@@ -2608,6 +2713,11 @@ $('#simBody').addEventListener('click', e => {
 });
 $('#simBtn').addEventListener('click', () => runSim());
 $('#bestBtn').addEventListener('click', () => runSim('best'));
+$('#sbTeams').addEventListener('click', e => {
+  const b = e.target.closest('[data-sbt]'); if (!b) return; const t = b.dataset.sbt, cur = S.sbTeams || [];
+  S.sbTeams = t === '*' ? [] : cur.includes(t) ? cur.filter(x => x !== t) : [...cur, t];
+  renderSbTeams(); save();
+});
 $('#pullOdds').addEventListener('click', pullVegas);
 $('#lineType').addEventListener('change', syncLineType);
 $('#lateSwap').addEventListener('change', () => { save(); renderResults(); });
