@@ -247,6 +247,17 @@ table.carry th { position: static; background: none; padding: 4px 6px; }
 table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .simnote { padding: 10px 14px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .simnote b { color: var(--ink); font-weight: 600; }
+.lsbtns { display: flex; flex-wrap: wrap; gap: 8px; }
+.lsnews { font-size: 13px; color: var(--muted); } .lsnews b { color: var(--ink); } .lsnews small { font-family: var(--f-data); font-size: 11.5px; }
+.lsw { display: grid; gap: 3px; min-width: 190px; }
+.lsw small, .lst td small { font-family: var(--f-data); font-size: 11.5px; color: var(--muted); }
+.lso::before, .lsi::before { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; content: ""; }
+.lso::before { background: var(--muted); } .lsi::before { background: var(--accent); }
+.lso b { font-weight: 500; text-decoration: line-through; text-decoration-color: var(--muted); }
+.lsf { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); }
+.lst tr.same td { opacity: .62; }
+.lst .lu2 .nw b { color: var(--accent); } .lst .lu2 .lk b { font-weight: 500; }
+.lst small.gd { color: var(--accent); font-weight: 700; } .lst small.bd { color: var(--muted); }
 .keep { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .keep input { width: 64px; border: 1px solid var(--line); background: var(--sunk); border-radius: 6px; padding: 5px 7px; font-family: var(--f-data); font-size: 12.5px; }
 .dist { position: relative; display: block; width: 120px; height: 10px; }
@@ -471,7 +482,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
       <section class="panel" aria-label="Sim-built lineups">
       <div class="panel-h"><h2>Sim-built lineups</h2></div>
       <div class="form">
-        <span class="hint" style="font-size:12.5px;color:var(--muted)">Swish builds a pool of candidate lineups, runs every one through the selected contest, improves the best with simulation-checked swaps, and keeps a diversified set. The picks are then re-scored on fresh replays so their numbers aren't inflated by luck.</span>
+        <span class="hint" style="font-size:12.5px;color:var(--muted)">Swish builds a pool of candidate lineups, runs every one through the selected contest, re-tests the leaders on fresh replays, improves the best with simulation-checked swaps, and keeps a diversified set. The picks are then re-scored on fresh replays so their numbers aren't inflated by luck.</span>
         <div class="two">
           <div class="field"><label for="bestN">Lineups to keep</label><input type="number" id="bestN" min="1" max="150" value="20"></div>
           <div class="field"><label for="sbStack">Max stack size</label><input type="number" id="sbStack" min="2" max="8" value="4"></div>
@@ -511,8 +522,40 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     </div>
     <div class="outwrap" id="luOutwrap" hidden><textarea class="out" id="luOutText" readonly aria-label="Upload CSV"></textarea></div>
   </section>
+  <section class="panel" aria-label="Late swap" style="margin-top:14px">
+    <div class="panel-h"><h2>Late swap</h2><span class="meta" id="lsMeta"></span></div>
+    <div class="form">
+      <span class="hint" style="font-size:12.5px;color:var(--muted)">After early games tip, fix the open spots in every lineup. Players in locked games stay in their slots; swaps come only from games that haven't started and fit the salary you have left.</span>
+      <div class="field"><span class="flabel">Games</span><div class="chips" id="lsGames"></div><span class="hint" id="lsGamesHint"></span></div>
+      <div class="field"><span class="flabel">News in the open games</span><span class="lsnews" id="lsNews"></span></div>
+      <div class="field"><label for="lsScope">Swap</label><select id="lsScope" class="sel"><option value="news" selected>Only where news hits (keeps the rest of each lineup)</option><option value="all">Any lineup that can improve (full re-optimize)</option></select>
+        <span class="hint">News mode replaces players who are out or whose projection dropped, and brings in players whose projection rose. Lineups the news doesn't touch are left alone, so your set stays as varied as you built it.</span></div>
+      <div class="two">
+        <div class="field"><label for="lsSrc">Lineups to swap</label><select id="lsSrc" class="sel"></select></div>
+        <div class="field"><label for="lsObj">Re-optimize by</label><select id="lsObj" class="sel"><option value="proj" selected>Projection</option><option value="ceil">Ceiling</option><option value="small">Small Field leverage</option><option value="large">Large Field leverage</option></select></div>
+      </div>
+      <div class="two">
+        <div class="field"><label for="lsMax">Max swaps per lineup</label><select id="lsMax" class="sel"><option value="0" selected>Auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></div>
+        <div class="field"><label for="lsGain">Swap only for a gain of</label><input type="number" id="lsGain" min="0" step="0.1" value="0.5"></div>
+      </div>
+      <div class="lsbtns">
+        <label class="btn" for="lsProj">Update projections</label><input type="file" id="lsProj" accept=".csv,text/csv" hidden>
+        <label class="btn" for="lsEntries">Import entries file</label><input type="file" id="lsEntries" accept=".csv,text/csv" hidden>
+        <button class="btn primary" id="lsRun">Find swaps</button>
+      </div>
+      <span class="hint" style="font-size:12.5px;color:var(--muted)">Update projections reads a new projections file without resetting the slate. Import entries file takes the entries CSV from DraftKings or FanDuel (Edit Entries), so the result uploads straight back with your Entry IDs.</span>
+    </div>
+    <div class="scroll" id="lsOut"></div>
+    <div class="foot" id="lsFoot" hidden>
+      <span class="meta" id="lsExportMeta"></span>
+      <button class="btn primary" id="lsApply">Apply to my lineups</button>
+      <button class="btn" id="lsCopy">Copy CSV</button>
+      <button class="btn" id="lsSave" hidden>Download CSV</button>
+    </div>
+    <div class="outwrap" id="lsOutwrap" hidden><textarea class="out" id="lsOutText" readonly aria-label="Late swap CSV"></textarea></div>
+  </section>
 </div>
-<p class="ver" id="ver">Swish v36</p>
+<p class="ver" id="ver">Swish v37</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -573,24 +616,27 @@ function solveOne(site, rows, cfg) {
   const lockedKeys = cfg.locks; let lockLeft = lockedKeys.size;
   const lastRowOfKey = new Map(); rows.forEach((r, i) => lastRowOfKey.set(r.key, i));
   let best = -Infinity, bestPick = null, nodes = 0; const pick = [];
-  let salary = 0, own = 0, cpt = 0, teams = 0, games = 0;
+  let salary = 0, own = 0, cpt = 0, teams = 0, games = 0, kept = 0;
+  const tb = cfg.teamBase || {}, keepSet = cfg.minKeep ? cfg.keep : null;
   const minTeams = site.minTeams, minGames = site.minGames;
   const rec = (start, r, pts) => {
     if (++nodes > cfg.nodeLimit) return;
     if (r === 0) {
       if (lockLeft > 0 || teams < minTeams || games < minGames) return;
+      if (keepSet && kept < cfg.minKeep) return;
       if (site.showdown && cpt !== 1) return;
       if (cfg.minSal && salary < cfg.minSal) return;
       if (pts > best) { best = pts; bestPick = pick.slice(); }
       return;
     }
     if (lockLeft > r) return;
+    if (keepSet && kept + r < cfg.minKeep) return;
     if (Math.max(0, minTeams - teams) > r || Math.max(0, minGames - games) > r) return;
     const R = cap - salary;
     for (let j = start; j < n; j++) {
       if (pts + bound(j, r, R) <= best + 1e-9) return;
       const p = rows[j];
-      let ok = !keyUsed.has(p.key) && p.salary <= R && (teamCnt[p.team] || 0) < cfg.maxTeam;
+      let ok = !keyUsed.has(p.key) && p.salary <= R && (teamCnt[p.team] || 0) + (tb[p.team] || 0) < cfg.maxTeam;
       if (ok && site.showdown && p.cpt && cpt) ok = false;
       if (ok && site.showdown && !p.cpt && !cpt && r === 1) ok = false;
       if (ok && cfg.maxOwn && own + p.own > cfg.maxOwn) ok = false;
@@ -607,9 +653,10 @@ function solveOne(site, rows, cfg) {
         if (!teamCnt[p.team]) teams++; teamCnt[p.team] = (teamCnt[p.team] || 0) + 1;
         if (!gameCnt[p.game]) games++; gameCnt[p.game] = (gameCnt[p.game] || 0) + 1;
         keyUsed.add(p.key); salary += p.salary; own += p.own; if (p.cpt) cpt++; if (locked) lockLeft--;
+        const isK = keepSet && keepSet.has(p.key); if (isK) kept++;
         pick.push(p);
         rec(j + 1, r - 1, pts + p.v);
-        pick.pop();
+        pick.pop(); if (isK) kept--;
         if (locked) lockLeft++; if (p.cpt) cpt--; own -= p.own; salary -= p.salary; keyUsed.delete(p.key);
         if (--gameCnt[p.game] === 0) games--; if (--teamCnt[p.team] === 0) teams--;
         for (let t = 0; t < pi.length; t++) overlap[pi[t]]--;
@@ -859,7 +906,7 @@ async function simOptimals(siteKey, rows, sim, { locks = [], maxTeam = 0, maxIte
 //  - consensus: the most obvious good-and-popular lineups (projection x (1 + ownership)), 15% of the
 //    field with geometric decay, scaled up on chalky slates where real fields duplicate more.
 // Ownership uses a separate Large Field column when the projections file has one.
-async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpendFrac = 0.965, calibrate = true, sharpShare = 0.35, consensusShare = 0.15, consensusCount = 8, herdShare = 0.3, herdExp = 2.5, sampleFrac = 0.35, sharpCount = 250, sharpRand = 18, onProgress } = {}) {
+async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpendFrac = 0.965, calibrate = true, sharpShare = 0.35, consensusShare = 0.15, consensusCount = 8, herdShare = 0.3, herdExp = 2.5, sampleFrac = 0.35, sharpCount = 250, sharpRand = 18, reuse = null, onProgress } = {}) {
   const site = SITES[siteKey];
   const rng = mulberry32((seed * 7919 + 13) >>> 0);
   const pool = players.filter(p => p.proj > 0);
@@ -951,7 +998,10 @@ async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpen
   const rowsFor = f => { const rows = []; for (const p of pool) { const r = Object.assign({}, p, { proj: f(p) }); if (site.showdown) rows.push(Object.assign({}, r, { cpt: true, salary: p.cptSalary })); rows.push(Object.assign({}, r, { cpt: false })); } return rows; };
   // optimizer users: leverage builds with a 60% exposure cap
   const sharp = [];
-  if (sharpShare > 0) {
+  // `reuse` (an earlier field for the same slate): keep its optimizer and consensus builds, which are
+  // the slow part, and redraw only the casual entrants
+  if (reuse) sharp.push(...reuse.sharpKeys);
+  else if (sharpShare > 0) {
     const n = Math.min(sharpCount, Math.max(60, Math.round(sampleSize * sharpShare)));
     const maxExp = {}; pool.forEach(p => maxExp[p.key] = 60);
     let last = performance.now();
@@ -963,14 +1013,15 @@ async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpen
   sharp.forEach(keys => lineups.push({ keys, w: sharpW0 / sharp.length, kind: 'sharp' }));
   // consensus: the obvious good-and-popular builds, geometric decay
   const cons = [];
-  if (consensusShare > 0) for (const r of generate(siteKey, rowsFor(p => p.proj * (1 + ownOf(p) / 100)), { lineups: consensusCount, uniq: 1, rand: 0, locks: [], excl: [], minExp: {}, maxExp: {}, nodeLimit: 2e5 })) { if (r.error) break; cons.push(r.lineup.map(p => p.key)); }
+  if (reuse) cons.push(...reuse.consKeys);
+  else if (consensusShare > 0) for (const r of generate(siteKey, rowsFor(p => p.proj * (1 + ownOf(p) / 100)), { lineups: consensusCount, uniq: 1, rand: 0, locks: [], excl: [], minExp: {}, maxExp: {}, nodeLimit: 2e5 })) { if (r.error) break; cons.push(r.lineup.map(p => p.key)); }
   const dec = cons.map((_, i) => Math.pow(0.8, i)), decSum = dec.reduce((a, b) => a + b, 0) || 1;
   cons.forEach((keys, i) => lineups.push({ keys, w: consensusShare * dec[i] / decSum, kind: 'consensus' }));
   // keep total weight at 1 when a layer came out empty
   const W = lineups.reduce((a, l) => a + l.w, 0); lineups.forEach(l => l.w /= W);
   const realized = {}; lineups.forEach(l => l.keys.forEach(k => realized[k] = (realized[k] || 0) + l.w * 100));
   onProgress && onProgress(1);
-  return { lineups, realized, casualDraws: raw.length, sharpCount: sharp.length, consensusCount: cons.length, consensusShare, concentration };
+  return { sharpKeys: sharp, consKeys: cons, lineups, realized, casualDraws: raw.length, sharpCount: sharp.length, consensusCount: cons.length, consensusShare, concentration };
 }
 
 // Payout table: DraftKings "Prize Payouts" text pasted by the user, or a typical GPP shape.
@@ -1272,10 +1323,12 @@ function fixSlots(site, l) {
   if (l.every((p, i) => p.pos.some(x => site.slots[i].includes(x)))) return l;
   return slotMatch(site, l, site.slots.map((_, i) => i)) || l;
 }
-function lateSwapOrder(site, l) {
+// `fixed` (optional, by slot): players already locked in their slots stay there
+function lateSwapOrder(site, l, fixed) {
   if (!site.slots || site.showdown) return l;
   if (!l.every(p => tipOf(p) != null)) return fixSlots(site, l);
   const flex = site.slots.map((s, i) => i).filter(i => site.slots[i].length > 1);
+  if (fixed && !l.every((p, i) => p.pos.some(x => site.slots[i].includes(x)))) return l;
   const times = [...new Set(l.map(tipOf))].sort((a, b) => a - b);
   if (!flex.length || times.length < 2) return fixSlots(site, l);
   // Try every legal arrangement; score = UTIL slots' game ranks first, then the other flex
@@ -1284,6 +1337,7 @@ function lateSwapOrder(site, l) {
   const widest = Math.max(...flex.map(i => site.slots[i].length));
   const wt = i => site.slots[i].length === widest ? 1000 : site.slots[i].length >= 4 ? 30 : 1;
   const n = site.size, cur = new Array(n), used = new Array(l.length).fill(false);
+  if (fixed) fixed.forEach((f, i) => { if (f) { used[i] = true; cur[i] = l[i]; } });
   let best = null, bestScore = -1;
   const order = site.slots.map((s, i) => i).sort((a, b) => site.slots[a].length - site.slots[b].length);
   (function dfs(k) {
@@ -1293,11 +1347,14 @@ function lateSwapOrder(site, l) {
       return;
     }
     const s = order[k];
+    if (fixed && fixed[s]) return dfs(k + 1);
     for (let j = 0; j < l.length; j++) if (!used[j] && l[j].pos.some(x => site.slots[s].includes(x))) { used[j] = true; cur[s] = l[j]; dfs(k + 1); used[j] = false; }
   })(0);
   return best || fixSlots(site, l);
 }
-const swapOrder = l => settings().lateSwap === false ? fixSlots(SITES[S.site], l) : lateSwapOrder(SITES[S.site], l);
+// lineups edited by a late swap keep the exact slots they were saved in
+const isPinned = l => { const f = S.bank && S.bank.fixed; return !!(f && f[l.map(p => p.key).sort().join(',')]) && l.every((p, i) => p.pos.some(x => (SITES[S.site].slots[i] || []).includes(x))); };
+const swapOrder = l => SITES[S.site].slots && isPinned(l) ? l : settings().lateSwap === false ? fixSlots(SITES[S.site], l) : lateSwapOrder(SITES[S.site], l);
 
 // ===== helpers =====
 const $ = s => document.querySelector(s);
@@ -1446,7 +1503,7 @@ function slateFromProjections(T, fileName) {
   const isFD = T.some(r => (r['site'] || '').toUpperCase() === 'FD');
   return { site: isFD ? 'fd' : 'dk', players };
 }
-function importProjections(text, fileName, quiet) {
+function importProjections(text, fileName, quiet, updateOnly) {
   const rows = parseCSV(text);
   const T = tableFrom(rows, h => h.some(c => P_NAME.includes(c)) && h.some(c => P_PROJ.includes(c) || P_OWN.includes(c)));
   if (!T) return notify('err', `Couldn't find a player name column plus a projection or ownership column in <b>${esc(fileName)}</b>. Expected headers like <b>Name</b>, <b>Proj</b> (or FPTS) and <b>Own</b>.`);
@@ -1469,7 +1526,7 @@ function importProjections(text, fileName, quiet) {
   const idMatched = withIds.filter(r => byId.has(String(pickCol(r, P_ID)))).length;
   // A full projections file (salaries + IDs) always starts a fresh slate; only a projections-only file
   // (no salaries or IDs) updates the slate already loaded.
-  const matched = S.source === 'sample' || S.isBuiltin || standalone ? 0 : T.filter(r => find(r).length).length;
+  const matched = updateOnly ? T.length : S.source === 'sample' || S.isBuiltin || standalone ? 0 : T.filter(r => find(r).length).length;
   if (matched < T.length * 0.5) {
     const sl = slateFromProjections(T, fileName);
     if (sl.players.length >= SITES[sl.site].size) {
@@ -1494,7 +1551,7 @@ function importProjections(text, fileName, quiet) {
     hit++;
   }
   save(); render();
-  notify(hit ? 'ok' : 'err', `Matched <b>${hit}</b> projection rows from ${esc(fileName)}.` + (miss.length ? ` Not on this slate: ${esc(miss.slice(0, 8).join(', '))}${miss.length > 8 ? ` and ${miss.length - 8} more` : ''}.` : ''));
+  notify(hit ? 'ok' : 'err', `${updateOnly ? 'Updated projections in place: matched' : 'Matched'} <b>${hit}</b> projection rows from ${esc(fileName)}.${updateOnly && hit ? ' Lineups, locks and Vegas lines were kept.' : ''}` + (miss.length ? ` Not on this slate: ${esc(miss.slice(0, 8).join(', '))}${miss.length > 8 ? ` and ${miss.length - 8} more` : ''}.` : ''));
 }
 // Fresh slate from a new upload: everything tied to the old players goes; Vegas lines and game times
 // stay (they are keyed by matchup, so they only apply where the same teams meet on the new slate).
@@ -1645,7 +1702,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, sbStack: num('sbStack'), sbBreadth: $('#sbBreadth').value, sbTeams: (S.sbTeams || []).slice(), rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2 };
+    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, sbStack: num('sbStack'), sbBreadth: $('#sbBreadth').value, sbTeams: (S.sbTeams || []).slice(), rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2, lsObj: $('#lsObj').value, lsMax: $('#lsMax').value, lsGain: num('lsGain'), lsScope: $('#lsScope').value };
 }
 
 // ===== notices =====
@@ -1843,7 +1900,7 @@ async function build() {
   building = false; $('#buildBtn').disabled = false; $('#buildBtn').textContent = 'Build lineups';
   // Projection (cash) builds read top-down: best projected lineup first
   if (type === 'proj') { const tot = l => l.reduce((a, p) => a + (p.proj || 0) * boostF(p), 0); out.sort((a, b) => tot(b) - tot(a)); }
-  if (out.length) S.bank = Object.assign(S.bank || {}, bankBase(), { opt: out.map(l => l.map(p => p.key)), optType: type, optAt: Date.now() });
+  if (out.length) S.bank = Object.assign(S.bank || {}, bankBase(), { opt: out.map(l => l.map(p => p.key)), optType: type, optAt: Date.now(), fixed: {}, snap: lsSnap() });
   S.lineups = out; S.builtSite = S.site; S.lineupType = type; S.lineupSt = { ceilW: st.ceilW, smallFade: st.smallFade, largeFade: st.largeFade }; S.tab = S.tab || 'lineups'; if (S.sim) S.sim.mineStale = true;
   $('#buildMsg').textContent = out.length ? `Built ${out.length} lineup${out.length === 1 ? '' : 's'} in ${((performance.now() - t0) / 1000).toFixed(2)}s.` : 'No lineups built.';
   if (err) notify('err', esc(err));
@@ -1887,6 +1944,7 @@ function bankSet(which) {
 let LU_SET = 'opt';
 function renderLineupsView() {
   if (!$('#luBody')) return;
+  if (typeof renderLateSwap === 'function') setTimeout(renderLateSwap, 0);
   const site = SITES[S.site], B = S.bank || {};
   const nO = bankSet('opt').length, nS = bankSet('sim').length, nA = bankSet('all').length;
   $('#luNopt').textContent = nO || ''; $('#luNsim').textContent = nS || ''; $('#luNall').textContent = nA || '';
@@ -1931,7 +1989,7 @@ $('#luSimAll').addEventListener('click', () => {
   if (!selectedContests(settings()).length) return notify('err', 'Pick at least one contest on the Simulate tab first.');
   runSim(null, list).then(() => renderLineupsView());
 });
-$('#luTabs').addEventListener('click', e => { const b = e.target.closest('[data-set]'); if (b) { LU_SET = b.dataset.set; renderLineupsView(); } });
+$('#luTabs').addEventListener('click', e => { const b = e.target.closest('[data-set]'); if (b) { LU_SET = b.dataset.set; if (LS.src !== 'file') LS.res = null; renderLineupsView(); } });
 $('#luClear').addEventListener('click', () => {
   if (LU_SET === 'opt') Object.assign(S.bank, { opt: [], optAt: null }); else if (LU_SET === 'sim') Object.assign(S.bank, { sim: [], simStats: [], simAt: null });
   save(); renderLineupsView();
@@ -1961,6 +2019,202 @@ $('#luCopy').addEventListener('click', () => {
     });
   } catch (e) {}
 })();
+
+// ===== Late swap: re-optimize the unlocked part of lineups after some games have tipped =====
+// Source lineups come from the Lineups tab or from the site's entries file (DKEntries.csv). Players in
+// locked games stay in their slots; the open slots are re-filled from games that haven't started, inside
+// the salary left over, and the open players are re-ordered so the latest games sit in the flex slots.
+const LS = { src: 'set', entries: null, fileName: '', res: null, at: 0 };
+function lsGames() {
+  const m = new Map(); const ov = (S.bank && S.bank.lsLock) || {}, now = Date.now();
+  for (const p of S.players) if (!m.has(p.game)) { const tip = tipOf(p); m.set(p.game, { game: p.game, tip, auto: tip != null && tip <= now, locked: ov[p.game] != null ? !!ov[p.game] : (tip != null && tip <= now) }); }
+  return [...m.values()].sort((a, b) => (a.tip ?? 9e15) - (b.tip ?? 9e15) || a.game.localeCompare(b.game));
+}
+// Projections as they stood when the lineups were built, so later changes show up as news
+function lsSnap() { const o = {}; S.players.forEach(p => { o[p.key] = +(p.proj * boostF(p)).toFixed(2); }); return o; }
+function lsKeepSnap() { const B = S.bank = Object.assign(S.bank || {}, bankBase()); if (!B.snap) B.snap = lsSnap(); }
+function lsNews() {
+  const st = settings(), snap = (S.bank && S.bank.snap) || null, lg = new Set(lsGames().filter(g => g.locked).map(g => g.game));
+  const N = { out: [], down: [], up: [], has: !!snap };
+  for (const p of S.players) {
+    if (lg.has(p.game) || !(p.salary > 0)) continue;
+    const was = snap ? snap[p.key] : null, now = p.proj * boostF(p);
+    if (p.excl || S.gamesOff.has(p.game) || (st.skipOut && p.status === 'O') || !(p.proj > 0)) { if (p.excl || (was != null && was >= 8)) N.out.push({ p, was, now: 0 }); continue; }
+    if (was == null) continue;
+    const d = now - was, bar = Math.max(1, 0.04 * was);
+    if (d <= -bar) N.down.push({ p, was, now }); else if (d >= bar) N.up.push({ p, was, now });
+  }
+  N.down.sort((a, b) => (a.now - a.was) - (b.now - b.was)); N.up.sort((a, b) => (b.now - b.was) - (a.now - a.was));
+  return N;
+}
+function lsParseEntries(text, fileName) {
+  const site = SITES[S.site];
+  if (site.showdown) return notify('err', 'Late swap works on Classic slates. Showdown has a single game, so nothing stays open after tip.');
+  const rows = parseCSV(text);
+  const hi = rows.findIndex(r => r.some(c => /^entry[ _]?id$/i.test(c.trim())));
+  if (hi < 0) return notify('err', `<b>${esc(fileName)}</b> doesn't look like an entries file: no <b>Entry ID</b> column. On DraftKings, open Lineups, choose Edit Entries and download the CSV.`);
+  const H = rows[hi].map(c => c.trim()); const eCol = H.findIndex(c => /^entry[ _]?id$/i.test(c));
+  let sCol = -1; for (let i = 0; i + site.size <= H.length; i++) if (site.slotNames.every((n, k) => (H[i + k] || '').toUpperCase() === n)) { sCol = i; break; }
+  if (sCol < 0) return notify('err', `<b>${esc(fileName)}</b> has no ${site.slotNames.join(', ')} columns. Is it a ${site.label} file?`);
+  const byId = new Map(S.players.map(p => [String(p.id), p]));
+  const idOf = c => { c = c.trim(); let m = /\(([\w-]+)\)\s*(?:\(LOCKED\))?\s*$/i.exec(c); if (m) return m[1]; m = /^([\w-]+):/.exec(c); return m ? m[1] : c; };
+  const entries = []; let unknown = 0, empty = 0;
+  for (const r of rows.slice(hi + 1)) {
+    const id = (r[eCol] || '').trim(); if (!/^\d+$/.test(id)) continue;
+    const cells = site.slotNames.map((_, k) => r[sCol + k] || '');
+    if (cells.every(c => !c.trim())) { empty++; continue; }
+    const l = cells.map(c => byId.get(idOf(c)));
+    if (l.some(x => !x)) { unknown++; continue; }
+    entries.push({ row: r.slice(0, sCol + site.size), cells, l, flag: cells.map(c => /\(LOCKED\)/i.test(c)), entryId: id, contest: (r[H.findIndex(c => /^contest[ _]?name$/i.test(c))] || '').trim() });
+  }
+  if (!entries.length) return notify('err', unknown ? `None of the ${unknown} entries in <b>${esc(fileName)}</b> match this slate's player IDs. Load the same slate's projections first.` : `No filled entries found in <b>${esc(fileName)}</b>.`);
+  lsKeepSnap();
+  Object.assign(LS, { src: 'file', entries, fileName, head: H.slice(0, sCol + site.size), sCol, res: null });
+  notify('ok', `Read <b>${entries.length}</b> entries from ${esc(fileName)}${unknown ? `; ${unknown} skipped because a player isn't on this slate` : ''}${empty ? `; ${empty} empty` : ''}. Press <b>Find swaps</b>.`);
+  renderLateSwap();
+}
+function lsSource() {
+  if (LS.src === 'file' && LS.entries) return LS.entries.map(e => ({ cur: e.l, flag: e.flag, e }));
+  return bankSet(LU_SET === 'all' ? 'allRaw' : LU_SET).map(x => ({ cur: swapOrder(x.l), flag: null, x }));
+}
+function lsRun() {
+  const site = SITES[S.site], st = settings();
+  if (site.showdown) return notify('err', 'Late swap works on Classic slates.');
+  const src = lsSource(); if (!src.length) return notify('err', 'No lineups to swap. Build lineups first, or import your entries file.');
+  const lockedGames = new Set(lsGames().filter(g => g.locked).map(g => g.game));
+  const type = st.lsObj || 'proj', maxSwaps = +st.lsMax || 0, minGain = Math.max(0, +st.lsGain || 0);
+  const newsOnly = st.lsScope !== 'all', news = lsNews(), hitKeys = new Set(news.out.concat(news.down).map(x => x.p.key)), upKeys = new Set(news.up.map(x => x.p.key));
+  const avail = withBoosts(withVegas(S.players.filter(p => !S.gamesOff.has(p.game) && !p.excl && !(st.skipOut && p.status === 'O') && p.salary > 0 && p.proj > 0 && !lockedGames.has(p.game)), st));
+  const score = new Map(avail.map(p => [p.key, buildScore(p, st, type)]));
+  const by = new Map(S.players.map(p => [p.key, p]));
+  const rowsAll = avail.map(p => ({ key: p.key, pos: p.pos, team: p.team, game: p.game, salary: p.salary, own: p.own || 0, v: Math.max(0.01, score.get(p.key)) }));
+  const memo = new Map(), prevBy = new Map(); const out = [];
+  for (const s of src) {
+    const cur = s.cur, okey = cur.map(p => p.key).join(',');
+    if (memo.has(okey)) { out.push({ ...memo.get(okey), s }); continue; }
+    const fixed = cur.map((p, i) => lockedGames.has(p.game) || !!(s.flag && s.flag[i]));
+    const open = cur.map((_, i) => i).filter(i => !fixed[i]);
+    const res = { s, cur, next: cur, fixed, outs: [], ins: [], gain: 0, why: '' };
+    const done = () => { memo.set(okey, res); out.push(res); };
+    if (!open.length) { res.why = 'All players locked'; done(); continue; }
+    const lockedP = cur.filter((_, i) => fixed[i]), lockedKeys = new Set(lockedP.map(p => p.key));
+    const cap = site.cap - lockedP.reduce((a, p) => a + p.salary, 0);
+    const teamBase = {}; lockedP.forEach(p => teamBase[p.team] = (teamBase[p.team] || 0) + 1);
+    const curOpen = open.map(i => cur[i]), dead = curOpen.filter(p => !score.has(p.key));
+    const curScore = dead.length ? -Infinity : curOpen.reduce((a, p) => a + score.get(p.key), 0);
+    const pseudo = { cap, size: open.length, slots: open.map(i => site.slots[i]), maxTeam: site.maxTeam, minTeams: 1, minGames: 1 };
+    const lsig = [...lockedKeys].sort().join(','); if (!prevBy.has(lsig)) prevBy.set(lsig, []);
+    const prev = prevBy.get(lsig), prevByKey = new Map(); prev.forEach((ks, i) => ks.forEach(k => { if (!prevByKey.has(k)) prevByKey.set(k, []); prevByKey.get(k).push(i); }));
+    const keep = new Set(curOpen.map(p => p.key));
+    // News mode: a lineup holding a player who is out or dropped may swap him and one more (to make salary
+    // work); any other lineup may only bring in players whose projection rose.
+    const hit = curOpen.filter(p => hitKeys.has(p.key)).length;
+    let rows = rowsAll.filter(r => !lockedKeys.has(r.key)), limit = maxSwaps;
+    if (newsOnly) {
+      if (!hit) { rows = rows.filter(r => keep.has(r.key) || upKeys.has(r.key)); if (rows.length === curOpen.length || !upKeys.size) { res.why = 'No news touches this lineup'; prev.push(curOpen.map(p => p.key)); done(); continue; } }
+      else if (!limit) limit = hit + 1;
+    }
+    const solve = minKeep => solveOne(pseudo, rows.map(r => ({ ...r })), { prev, prevByKey, uniq: prev.length ? 1 : 0, locks: new Set(), maxTeam: site.maxTeam, teamBase, keep, minKeep, nodeLimit: 2e6 }).pick;
+    let pick = solve(limit ? Math.max(0, open.length - Math.max(limit, dead.length)) : 0);
+    if (!pick && limit && dead.length) pick = solve(0);
+    const legal = l => new Set(l.map(p => p.team)).size >= site.minTeams && new Set(l.map(p => p.game)).size >= site.minGames;
+    let next = null;
+    if (pick) {
+      const arr = slotMatch(site, pick.map(r => by.get(r.key)), open);
+      if (arr) { next = cur.slice(); open.forEach((i, k) => next[i] = arr[k]); if (!legal(next)) next = null; else if (st.lateSwap !== false) next = lateSwapOrder(site, next, fixed); }
+    }
+    if (!next) { res.why = dead.length ? `No legal replacement fits for ${dead.map(p => p.name).join(', ')}` : 'No legal alternative'; if (!dead.length) prev.push(curOpen.map(p => p.key)); done(); continue; }
+    const newScore = open.reduce((a, i) => a + score.get(next[i].key), 0), gain = newScore - curScore;
+    const nk = new Set(next.map(p => p.key)), ck = new Set(cur.map(p => p.key));
+    const changed = cur.some(p => !nk.has(p.key));
+    if (!dead.length && (!changed || gain < Math.max(minGain, 1e-6))) { res.why = changed ? `Best swap gains only ${f1(gain)}` : newsOnly && !hit ? 'Risers don\'t improve it' : 'Already the best fill'; prev.push(curOpen.map(p => p.key)); done(); continue; }
+    Object.assign(res, { next, outs: cur.filter(p => !nk.has(p.key)), ins: next.filter(p => !ck.has(p.key)), gain: dead.length ? null : gain, forced: dead.map(p => p.key) });
+    prev.push(open.map(i => next[i].key)); done();
+  }
+  Object.assign(LS, { res: out, at: Date.now(), type, resSrc: LS.src === 'file' && LS.entries ? 'file' : LU_SET });
+  renderLateSwap();
+  $('#lsOut').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest' });
+}
+function lsCSV() {
+  const site = SITES[S.site], R = LS.res || [];
+  if (LS.resSrc === 'file') {
+    const q = c => /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c;
+    return LS.head.map(q).join(',') + '\n' + R.map(r => { const row = r.s.e.row.slice(); r.next.forEach((p, i) => { row[LS.sCol + i] = p === r.cur[i] ? r.s.e.cells[i] : String(p.id); }); return row.map(c => q(c || '')).join(','); }).join('\n') + '\n';
+  }
+  return site.slotNames.join(',') + '\n' + R.map(r => r.next.map(p => p.id).join(',')).join('\n') + '\n';
+}
+function lsApply() {
+  const R = LS.res || []; if (!R.length || LS.resSrc === 'file') return;
+  const B = S.bank = Object.assign(S.bank || {}, bankBase()); const sig = ks => ks.slice().sort().join(',');
+  const map = new Map(); B.fixed = B.fixed || {};
+  for (const r of R) { map.set(sig(r.cur.map(p => p.key)), r); if (r.fixed.some(Boolean)) B.fixed[sig(r.next.map(p => p.key))] = 1; }
+  const changedSig = new Set(R.filter(r => r.next !== r.cur).map(r => sig(r.cur.map(p => p.key))));
+  if (S.builtSite === S.site) S.lineups = S.lineups.map(l => { const r = map.get(sig(l.map(p => p.key))); return r ? r.next : l; });
+  if (B.sim) { B.sim = B.sim.map((ks, i) => { const g = sig(ks), r = map.get(g); if (r && changedSig.has(g) && B.simStats) B.simStats[i] = null; return r ? r.next.map(p => p.key) : ks; }); }
+  if (B.opt && S.builtSite !== S.site) B.opt = B.opt.map(ks => { const r = map.get(sig(ks)); return r ? r.next.map(p => p.key) : ks; });
+  if (changedSig.size) { delete B.allStats; if (S.sim) S.sim.mineStale = true; }
+  const n = changedSig.size; LS.res = null; save(); renderResults(); renderLineupsView();
+  notify('ok', `Applied late swaps to <b>${n}</b> lineup${n === 1 ? '' : 's'}. Locked players keep their slots; use <b>Download upload CSV</b> above for the updated set.`);
+}
+function renderLateSwap() {
+  if (!$('#lsGames') || S.mainView !== 'lu') return;
+  const site = SITES[S.site], games = lsGames(), nLocked = games.filter(g => g.locked).length;
+  $('#lsGames').innerHTML = games.length ? games.map(g => `<button type="button" class="chip" data-lsg="${esc(g.game)}" aria-pressed="${g.locked}" title="${g.locked ? 'Locked: players in this game stay put' : 'Open: players in this game can be swapped'}">${esc(g.game.replace(' v ', '–'))}${g.tip != null ? ' ' + fmtTip(g.tip) : ''}${g.locked ? ' · locked' : ''}</button>`).join('') : '<span class="hint">No slate loaded.</span>';
+  const timed = games.some(g => g.tip != null);
+  $('#lsGamesHint').textContent = (timed ? 'Games lock on their own at tip time. ' : 'No tip times on this slate, so mark games yourself. ') + 'Tap a game to lock or reopen it.';
+  const fileOn = LS.src === 'file' && LS.entries;
+  $('#lsSrc').innerHTML = `<option value="set"${fileOn ? '' : ' selected'}>Lineups shown above (${bankSet(LU_SET === 'all' ? 'allRaw' : LU_SET).length})</option>` + (LS.entries ? `<option value="file"${fileOn ? ' selected' : ''}>${esc(LS.fileName)} (${LS.entries.length} entries)</option>` : '');
+  $('#lsMeta').textContent = `${nLocked} of ${games.length} games locked`;
+  const N = lsNews(), chg = x => `${esc(x.p.name)} <small>${f1(x.was)}→${f1(x.now)}</small>`, lst = (a, f) => a.slice(0, 8).map(f).join(', ') + (a.length > 8 ? ` and ${a.length - 8} more` : '');
+  $('#lsNews').innerHTML = N.out.length + N.down.length + N.up.length ? [N.out.length ? `<b>Out</b> ${lst(N.out, x => esc(x.p.name))}` : '', N.down.length ? `<b>Down</b> ${lst(N.down, chg)}` : '', N.up.length ? `<b>Up</b> ${lst(N.up, chg)}` : ''].filter(Boolean).join(' · ')
+    : N.has ? 'Nothing has changed in the open games since these lineups were built. Update projections, edit one on the Optimizer tab, or exclude a player who is out.' : 'Build lineups or import your entries first; changes you make after that show up here.';
+  const box = $('#lsOut'), foot = $('#lsFoot'), R = LS.res;
+  if (!R) { box.innerHTML = ''; foot.hidden = true; return; }
+  const ch = R.filter(r => r.next !== r.cur), gains = ch.filter(r => r.gain != null);
+  const pj = l => l.reduce((a, p) => a + p.proj * boostF(p), 0), sal = l => l.reduce((a, p) => a + p.salary, 0);
+  const label = { proj: 'projection', ceil: 'ceiling', small: 'small-field leverage', large: 'large-field leverage' }[LS.type];
+  const nm = p => `<b>${esc(p.name)}</b> <small>${esc(p.team)} ${f1(p.proj * boostF(p))}</small>`;
+  box.innerHTML = `<div class="simnote"><b>${ch.length}</b> of ${R.length} ${LS.resSrc === 'file' ? 'entries' : 'lineups'} change${ch.length === 1 ? 's' : ''}${gains.length ? `, gaining <b>${f1(gains.reduce((a, r) => a + r.gain, 0) / gains.length)}</b> in ${label} on average` : ''}. Swaps come only from games still open and fit the salary left after your locked players.${R.some(r => r.forced && r.forced.length) ? ' Lineups marked <b>must swap</b> held a player who is excluded, out or has no projection.' : ''}</div>` +
+    `<table class="simt lst"><thead><tr><th>#</th>${LS.resSrc === 'file' ? '<th>Entry</th>' : ''}<th>Swaps</th><th>Lineup after</th><th class="n">Proj</th><th class="n">Salary</th></tr></thead><tbody>` +
+    R.map((r, i) => { const c = r.next !== r.cur, d = pj(r.next) - pj(r.cur);
+      const sw = c ? `<div class="lsw">${r.outs.map(p => `<span class="lso">Out ${nm(p)}</span>`).join('')}${r.ins.map(p => `<span class="lsi">In ${nm(p)}</span>`).join('')}${r.forced && r.forced.length ? '<span class="lsf">must swap</span>' : ''}</div>` : `<span class="pos">${esc(r.why || 'No change')}</span>`;
+      const lu = `<div class="lu2" style="grid-template-rows: repeat(${Math.ceil(r.next.length / 2)}, auto)">${r.next.map((p, j) => `<span class="${r.fixed[j] ? 'lk' : r.cur.includes(p) ? '' : 'nw'}"><i>${site.slotNames[j]}</i><b title="${esc(p.name)}">${esc(p.name)}</b><small>${esc(p.team)}${r.fixed[j] ? ' 🔒' : ''}</small></span>`).join('')}</div>`;
+      return `<tr${c ? '' : ' class="same"'}><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LS.resSrc === 'file' ? `<td class="pos" title="${esc(r.s.e.contest)}">${esc(r.s.e.entryId)}</td>` : ''}<td class="lswc">${sw}</td><td class="lnames">${lu}</td><td class="n"><b>${f1(pj(r.next))}</b>${c ? `<br><small class="${d >= 0 ? 'gd' : 'bd'}">${d >= 0 ? '+' : ''}${f1(d)}</small>` : ''}</td><td class="n">${money(sal(r.next))}</td></tr>`; }).join('') + '</tbody></table>';
+  foot.hidden = false;
+  $('#lsApply').hidden = LS.resSrc === 'file' || !ch.length;
+  $('#lsExportMeta').textContent = LS.resSrc === 'file' ? `The CSV keeps your Entry IDs, so it uploads straight back to ${S.site === 'fd' ? 'FanDuel' : 'DraftKings'} as an entries edit. Unchanged and locked cells are left exactly as they were.` : ch.length ? 'Apply puts these swaps into your lineups. To push edits to the site in one upload, import your entries file instead.' : 'Nothing to apply.';
+}
+const lsFname = () => LS.resSrc === 'file' ? LS.fileName.replace(/\.csv$/i, '') + '-swapped.csv' : `${S.site === 'fd' ? 'fanduel' : 'draftkings'}-nba-late-swap.csv`;
+$('#lsGames').addEventListener('click', e => {
+  const b = e.target.closest('[data-lsg]'); if (!b) return; const g = lsGames().find(x => x.game === b.dataset.lsg); if (!g) return;
+  const B = S.bank = Object.assign(S.bank || {}, bankBase()); B.lsLock = B.lsLock || {};
+  if (!g.locked === g.auto) delete B.lsLock[g.game]; else B.lsLock[g.game] = !g.locked;
+  LS.res = null; save(); renderLateSwap();
+});
+$('#lsSrc').addEventListener('change', e => { LS.src = e.target.value; LS.res = null; renderLateSwap(); });
+$('#lsRun').addEventListener('click', lsRun);
+$('#lsApply').addEventListener('click', lsApply);
+$('#lsEntries').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f, lsParseEntries); e.target.value = ''; });
+$('#lsProj').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f, (t, n) => { lsKeepSnap(); importProjections(t, n, false, true); LS.res = null; if (LS.entries) { const by = new Map(S.players.map(p => [p.key, p])); LS.entries.forEach(en => { en.l = en.l.map(p => by.get(p.key) || p); }); } renderLateSwap(); }); e.target.value = ''; });
+$('#lsCopy').addEventListener('click', () => {
+  const csv = lsCSV(); const ta = $('#lsOutText'); ta.value = csv;
+  const fallback = () => { $('#lsOutwrap').hidden = false; ta.focus(); ta.select(); $('#lsExportMeta').textContent = 'Clipboard unavailable here. The CSV is selected below; copy it with your keyboard.'; };
+  try { navigator.clipboard.writeText(csv).then(() => { $('#lsExportMeta').textContent = 'Copied. Paste into a .csv file and upload it.'; }, fallback); } catch (e) { fallback(); }
+});
+(async () => {
+  try {
+    const btn = $('#lsSave');
+    if (!window.claude) {
+      btn.hidden = false;
+      btn.addEventListener('click', () => { const url = URL.createObjectURL(new Blob([lsCSV()], { type: 'text/csv' })); const a = document.createElement('a'); a.href = url; a.download = lsFname(); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000); $('#lsExportMeta').textContent = `Saved ${lsFname()}.`; });
+      return;
+    }
+    const dl = await window.claude?.use?.('downloads'); if (!dl) return;
+    btn.hidden = false;
+    btn.addEventListener('click', async () => { try { await dl.save({ filename: lsFname(), data: lsCSV() }); $('#lsExportMeta').textContent = `Saved ${lsFname()}.`; } catch (e) { if (e && e.code === 'declined') return; $('#lsExportMeta').textContent = 'Download unavailable here. Use Copy CSV instead.'; } });
+  } catch (e) {}
+})();
+setInterval(() => { if (S.mainView === 'lu' && !LS.res) renderLateSwap(); }, 60000);
 
 // ===== events =====
 $('#siteSeg').addEventListener('click', e => {
@@ -2227,7 +2481,7 @@ async function runSim(mode, lineupsOverride) {
     }
     if (buildBest && built && built.lineups.length) {
       const per = built.mine.map(r => ({ roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }));
-      S.bank = Object.assign(S.bank || {}, bankBase(), { sim: built.lineups.map(l => l.map(p => p.key)), simStats: per, simAt: Date.now(), simContests: contests.map(c => c.short) });
+      S.bank = Object.assign(S.bank || {}, bankBase(), { sim: built.lineups.map(l => l.map(p => p.key)), simStats: per, simAt: Date.now(), simContests: contests.map(c => c.short) }); lsKeepSnap();
       save();
     }
     if (buildBest) S.simTab = 'built'; else if (!mineL.length) S.simTab = S.simTab === 'mine' ? 'players' : S.simTab;
@@ -2363,10 +2617,10 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   if (!poolL.length) throw new Error(allowedSet ? `No candidate lineups fit with ${STACK_MIN}+ players from ${allowed.join('/')} under your settings.` : 'No candidate lineups fit your Optimizer settings.');
   const keysOf = L => L.map(l => l.map(p => p.key));
   const metric = ({ avgroi: 'roi', blend: 'roi' })[st.rankBy] || st.rankBy || 'roi';
-  msg(`Stage 1 of 3: scoring ${poolL.length.toLocaleString()} candidates in the contest simulation${P > 1 ? ` (${P} passes, each with its own field and replays)` : ''}…`);
+  msg(`Stage 1 of 4: scoring ${poolL.length.toLocaleString()} candidates in the contest simulation${P > 1 ? ` (${P} passes, each with its own field and replays)` : ''}…`);
   const passSims = [sim], passFields = [field];
   for (let pp = 1; pp < P; pp++) {
-    msg(`Stage 1 of 3: preparing pass ${pp + 1} of ${P}…`);
+    msg(`Stage 1 of 4: preparing pass ${pp + 1} of ${P}…`);
     passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap }));
     passFields.push(await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
   }
@@ -2380,7 +2634,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
     if (P > 1) acc.forEach(a => { ['mean', 'p10', 'p50', 'p90', 'p99'].forEach(k => a[k] /= P); a.c.forEach(c => KS.forEach(k => c[k] /= P)); });
     return acc;
   };
-  const scr = await evalMany(keysOf(poolL.map(x => x.l)), 60, 74);
+  const scr = await evalMany(keysOf(poolL.map(x => x.l)), 60, 70);
   // Scorer (as in Gridlock): z-scores across the candidate pool. ROI is soft-winsorized at the 5th/95th
   // percentile (beyond it a lineup still ranks by raw ROI at 15% weight, so the top isn't a tie);
   // True ROI only at the 1st/99th. Win rate is zero for most lineups, so top 1% rate breaks ties.
@@ -2395,7 +2649,21 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
     const zr = z(Z.cR(x.roiSolo), Z.roi), zt = z(Z.cT(x.roi), Z.tru), z1 = z(x.top1, Z.top1);
     return a + (metric === 'cash' ? z(x.cash, Z.cash) : metric === 'top1' ? z1 : metric === 'win' ? z(x.winSolo, Z.win) + 0.02 * z1 : metric === 'true' ? zt : metric === 'winAdj' ? z(x.win, Z.winA) + 0.02 * zt : zr);
   }, 0) / r.c.length;
-  const items = poolL.map((x, i) => ({ l: x.l, src: x.src, r: scr[i], sc: score(scr[i]) }));
+  // w = how many replay sets back this lineup's numbers; tier = how many re-tests it has survived
+  const items = poolL.map((x, i) => ({ l: x.l, src: x.src, r: scr[i], sc: score(scr[i]), w: P, tier: 0 }));
+  // Re-testing (successive halving). Picking the top few of ~1,500 lineups on one set of replays mostly
+  // picks the luckiest: their ROI falls by a third or more on fresh replays. So the leaders are re-scored
+  // on independent replays and fields, and each lineup's numbers are the average of everything it has run.
+  const simOpts = { teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap };
+  const mkCtx = async (k, it) => ({ w: it / iters, sim: await simulateScores(simPool, { iters: it, seed: runSeed + 7001 * k, ...simOpts }),
+    field: await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 300 + k, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, reuse: field }) });
+  const mergeR = (a, b, wa, wb) => ({ ...a, c: a.c.map((c, ci) => { const x = { ...c }; KS.forEach(k => { x[k] = (c[k] * wa + b.c[ci][k] * wb) / (wa + wb); }); return x; }) });
+  const refine = async (xs, ctx, from, to) => {
+    if (!xs.length) return;
+    const rr = await contestSimMulti(S.site, ctx.sim, keysOf(xs.map(x => x.l)), ctx.field, contests, f => simProgress({ from, to }, f));
+    xs.forEach((x, i) => { x.r = mergeR(x.r, rr[i], x.w, ctx.w); x.w += ctx.w; x.sc = score(x.r); x.tier++; });
+  };
+  const byRank = (a, b) => b.tier - a.tier || b.sc - a.sc;
   const sigs = new Set(poolL.map(x => sigOf(x.l)));
   if (wide) {
     // (2) sim-guided: players whose candidates score above average get a bonus, and new lineups are built around them
@@ -2405,7 +2673,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
     const n0 = cand.size;
     for (let gi = 0; gi < 3; gi++) await runT(mkRows(p => levBy(0.3)(p) * gb(p)), 50, 6, 8100 + gi, 'guided');
     const fresh = [...cand.values()].slice(n0).filter(x => !sigs.has(sigOf(x.l)));
-    if (fresh.length) { fresh.forEach(x => sigs.add(sigOf(x.l))); const rr = await evalMany(keysOf(fresh.map(x => x.l)), 74, 76); fresh.forEach((x, k) => items.push({ l: x.l, src: 'guided', r: rr[k], sc: score(rr[k]) })); }
+    if (fresh.length) { fresh.forEach(x => sigs.add(sigOf(x.l))); const rr = await evalMany(keysOf(fresh.map(x => x.l)), 70, 71); fresh.forEach((x, k) => items.push({ l: x.l, src: 'guided', r: rr[k], sc: score(rr[k]), w: P, tier: 0 })); }
   }
   // Stage 2 (as in Gridlock): improve the best lineups with simulation-checked swaps, two rounds.
   // Each slot tries position-matched pivots within $800 (best leverage, best projection, lowest owned),
@@ -2442,15 +2710,26 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
     }
     return out;
   };
+  const F1 = Math.max(200, Math.min(600, 10 * N)), F2 = Math.max(60, Math.min(300, 4 * N));
+  msg(`Stage 2 of 4: re-testing the top ${Math.min(F1, items.length)} on a second field and fresh replays…`);
+  const ctxB = await mkCtx(1, iters);
+  await refine(items.slice().sort(byRank).slice(0, F1), ctxB, 71, 75);
   for (let round = 1; round <= 2; round++) {
-    const best = items.slice().sort((a, b) => b.sc - a.sc).slice(0, wide ? 40 : 14), fresh = [];
+    const best = items.slice().sort(byRank).slice(0, wide ? 40 : 14), fresh = [];
     for (const x of best) for (const nb of neighbors(x.l)) { const g = sigOf(nb); if (!sigs.has(g)) { sigs.add(g); fresh.push(nb); } }
     if (!fresh.length) break;
-    msg(`Stage 2 of 3: improving the best lineups with ${fresh.length.toLocaleString()} simulation-checked player swaps (round ${round} of 2)…`);
-    const rr = await evalMany(keysOf(fresh), 76 + (round - 1) * 6, 82 + (round - 1) * 6);
-    fresh.forEach((l, k) => items.push({ l, src: wide ? 'wideswap' : 'swap', r: rr[k], sc: score(rr[k]) }));
+    msg(`Stage 2 of 4: improving the best lineups with ${fresh.length.toLocaleString()} simulation-checked player swaps (round ${round} of 2)…`);
+    const rr = await evalMany(keysOf(fresh), 75 + (round - 1) * 5, 78 + (round - 1) * 5);
+    const add2 = fresh.map((l, k) => ({ l, src: wide ? 'wideswap' : 'swap', r: rr[k], sc: score(rr[k]), w: P, tier: 0 }));
+    // only swaps that look competitive on the first replays earn the second look
+    const fin1 = items.filter(x => x.tier >= 1).sort(byRank), bar = fin1.length ? fin1[Math.min(F2, fin1.length) - 1].sc : -Infinity;
+    await refine(add2.filter(x => x.sc >= bar), ctxB, 78 + (round - 1) * 5, 80 + (round - 1) * 5);
+    items.push(...add2);
   }
-  const ranked = items.slice().sort((a, b) => b.sc - a.sc);
+  { const top = items.filter(x => x.tier >= 1).sort(byRank).slice(0, F2), itC = Math.min(6000, iters * 3);
+    msg(`Stage 3 of 4: final re-test of the top ${top.length} on ${itC.toLocaleString()} more replays and a third field…`);
+    await refine(top, await mkCtx(2, itC), 85, 89); }
+  const ranked = items.slice().sort(byRank);
   // Selection (as in Gridlock): players with a min exposure are filled first, then picks go down the
   // ranking under your max exposure and min unique; if that can't fill the set, the limits loosen in
   // steps (one more shared player, then 30% more exposure, then neither) until it is full.
@@ -2481,12 +2760,14 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   for (let k = 0; k < steps.length && picked.length < N; k++) { if (k > 0) relaxed = k; pass(steps[k][0], Math.min(site.size - 1, steps[k][1])); }
   // Stage 3: out-of-sample check on a separate fixed field and replays with 3x the runs; the
   // picks are then ordered by that check, since the search ranking carries its own luck.
-  msg(`Stage 3 of 3: re-testing the ${picked.length} picks${mineNow.length ? ' and your lineups' : ''} on a fresh field and fresh replays…`);
-  const oosField = await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 99, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: f => simProgress({ from: 88, to: 92 }, f) });
+  msg(`Stage 4 of 4: checking the ${picked.length} picks${mineNow.length ? ' and your lineups' : ''} on a fresh field and fresh replays…`);
+  const oosField = await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 99, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100, onProgress: f => simProgress({ from: 89, to: 92 }, f) });
   const simC = await simulateScores(simPool, { iters: Math.min(4000, iters * 3), seed: runSeed + 202, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap });
   const both = await contestSimMulti(S.site, simC, keysOf(picked.map(x => x.l).concat(mineNow)), oosField, contests, f => simProgress({ from: 92, to: 100 }, f));
   let val = both.slice(0, picked.length); const mineVal = both.slice(picked.length);
-  const ord = picked.map((_, i) => i).sort((i, j) => score(val[j]) - score(val[i]));
+  // order by everything known about each pick: its search re-tests plus this check
+  const wO = Math.min(4000, iters * 3) / iters, fin = picked.map((x, i) => score(mergeR(val[i], x.r, wO, x.w)));
+  const ord = picked.map((_, i) => i).sort((i, j) => fin[j] - fin[i]);
   const lineups = ord.map(i => picked[i].l); val = ord.map(i => val[i]); const inSample = ord.map(i => picked[i].r);
   const avgOf = (arr, f) => arr.length ? arr.reduce((a, r) => a + f(r), 0) / arr.length : null;
   const roiAvg = r => r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, capAvg = r => r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length;
@@ -2626,7 +2907,7 @@ function renderSim() {
     }
     const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
     if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI', top1: 'top 1% rate', win: 'win rate', cash: 'cash rate', true: 'True ROI (uncapped, dupes split)', winAdj: 'win rate (dupe-adjusted)' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI', top1: 'top 1% rate', win: 'win rate', cash: 'cash rate', true: 'True ROI (uncapped, dupes split)', winAdj: 'win rate (dupe-adjusted)' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The leaders are re-tested twice on new replays and fields before the final cut, so a lineup has to keep scoring well rather than get lucky once. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
     const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
