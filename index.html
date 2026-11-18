@@ -555,7 +555,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="lsOutwrap" hidden><textarea class="out" id="lsOutText" readonly aria-label="Late swap CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v38</p>
+<p class="ver" id="ver">Swish v39</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -2576,6 +2576,27 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   // leverage builds use your Small Field fade, fewer no-chalk builds are made, and chalk builds get one
   // leverage spot each (below). Large fields keep Gridlock's leverage-first recipe.
   const small = !sd && (maxEntries || 0) < 2500, fadeM = small ? (st.smallFade ?? 20) / 100 : largeFade;
+  // Game environment: Vegas total less a blowout discount when lines are in, otherwise the game's
+  // projected fantasy points (top 8 on each team). A good environment is at or above the slate median.
+  const envG = new Map();
+  { const vm = vmap || vegasMap();
+    for (const g of new Set(pool.map(p => p.game))) {
+      const ps = pool.filter(p => p.game === g), t0 = ps[0] && ps[0].team, v = vm && t0 && vm[t0];
+      const proj = [...new Set(ps.map(p => p.team))].reduce((a, t) => a + ps.filter(p => p.team === t).map(p => p.proj).sort((x, y) => y - x).slice(0, 8).reduce((s, x) => s + x, 0), 0);
+      envG.set(g, v && v.total ? v.total - 0.5 * Math.abs(v.spread || 0) : proj);
+    } }
+  const envMed = median([...envG.values()]) ?? 0, envOf = p => envG.get(p.game) ?? envMed;
+  // Pivots for each popular player: same position, salary within $1,000, a ceiling at least 90% of his,
+  // clearly lower ownership, and a game environment at least as good as his or above the slate median.
+  // Ranked by ceiling, environment and ownership; the best three are kept.
+  const pivotOf = !small ? [] : pool.filter(p => ownL(p) >= 20 && p.proj > 0 && !lockSet.has(p.key)).sort((a, b) => ownL(b) - ownL(a)).slice(0, 10).map(C => {
+    const cc = C.ceil || C.proj * 1.2;
+    const alts = pool.filter(Q => Q.key !== C.key && !Q.excl && Q.proj > 0 && (sd || Q.pos.some(x => C.pos.includes(x))) && Math.abs(Q.salary - C.salary) <= 1000
+      && (Q.ceil || Q.proj * 1.2) >= 0.9 * cc && ownL(Q) <= Math.min(ownL(C) - 8, 0.7 * ownL(C)) && (envOf(Q) >= envMed || envOf(Q) >= envOf(C)))
+      .sort((a, b) => (b.ceil || b.proj * 1.2) * (envOf(b) / envMed) * (1 - 0.5 * ownL(b) / 100) - (a.ceil || a.proj * 1.2) * (envOf(a) / envMed) * (1 - 0.5 * ownL(a) / 100)).slice(0, 3);
+    return { p: C, alts };
+  }).filter(x => x.alts.length);
+  const pivotMap = new Map(pivotOf.map(x => [x.p.key, x.alts]));
   for (let pp = 0; pp < P; pp++) {
     const s0 = 31 + pp * 1000;
     // leverage builds with your Large Field fade (Small Field fade in small contests), then a full-ownership fade
@@ -2589,13 +2610,12 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
       await run(mkRows(levBy(fadeM)), 3, 8, s0 + 9 + ti * 7 + size, 'base', top.map(p => p.key));
     }
     if (small) {
-      // Chalk plus one leverage spot. In small fields the sim rewards 4-6 chalk players and at most one
-      // player under ~10% owned; two or more leverage spots cost real ROI. So each build locks a single
-      // low-owned play with a real ceiling and fills the other spots with your Small Field scoring,
-      // which keeps them on the chalk.
-      const levP = pool.filter(p => ownL(p) < 10 && p.proj >= 0.3 * topProj && !p.excl && !lockSet.has(p.key))
-        .sort((a, b) => (b.ceil || b.proj * 1.2) / Math.sqrt(b.salary) - (a.ceil || a.proj * 1.2) / Math.sqrt(a.salary)).slice(0, 24);
-      for (let li = 0; li < levP.length; li++) await run(mkRows(p => p.key === levP[li].key ? p.proj : levBy(fadeM)(p) * (ownL(p) < 10 ? 0.85 : 1)), 6, 6, s0 + 3000 + li, 'core', [levP[li].key]);
+      // Chalk pivots: each build swaps one popular player for a lower-owned look-alike (below) and keeps
+      // the rest of the lineup on your Small Field scoring, so it stays on the chalk everywhere else.
+      for (let ci = 0; ci < pivotOf.length; ci++) for (let qi = 0; qi < pivotOf[ci].alts.length; qi++) {
+        const C = pivotOf[ci].p, Q = pivotOf[ci].alts[qi];
+        await run(mkRows(levBy(fadeM), pool.filter(x => x.key !== C.key)), 4, 6, s0 + 3000 + ci * 7 + qi, 'pivot', [Q.key]);
+      }
     }
   }
   if (wide) {
@@ -2705,7 +2725,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
       band.slice().sort((x, y) => lev(y) - lev(x)).slice(0, 5).forEach(addP);
       band.slice().sort((x, y) => y.proj - x.proj).slice(0, 3).forEach(addP);
       band.filter(q => q.proj >= 0.6 * p.proj).sort((x, y) => ownL(x) - ownL(y) || y.proj - x.proj).slice(0, 2).forEach(addP);
-      if (small) band.filter(q => ownL(q) < 10).sort((x, y) => (y.ceil || y.proj) - (x.ceil || x.proj)).slice(0, 2).forEach(addP);
+      if (small) (pivotMap.get(p.key) || []).filter(q => !inL.has(q.key)).forEach(addP); // the chalk pivots
       const byLev = elig.slice().sort((x, y) => lev(y) - lev(x)); byLev.slice(0, 4).forEach(addP);
       const rest = byLev.slice(4).filter(q => !picks.includes(q));
       for (let k = 0; k < 3 && rest.length; k++) addP(rest.splice(Math.floor(rng() * rest.length), 1)[0]);
@@ -2788,7 +2808,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   const tally = xs => xs.reduce((m, x) => { const k = x.src || 'base'; m[k] = (m[k] || 0) + 1; return m; }, {});
   return { passes: P, mine: val, lineups, candidates: items.length, swaps: items.filter(x => x.src === 'swap' || x.src === 'wideswap').length, metric, wanted: N, skipped, relaxed,
     breadth: wide ? 'wide' : 'normal', small, maxStack, teams: allowed,
-    shape: { chalk: avgOf(lineups, l => l.filter(p => ownL(p) >= 20).length), lev: avgOf(lineups, l => l.filter(p => ownL(p) < 8).length), own: avgOf(lineups, l => l.reduce((a, p) => a + ownL(p), 0)) }, srcCounts: tally(ord.map(i => picked[i])), srcPool: tally(items),
+    shape: { chalk: avgOf(lineups, l => l.filter(p => ownL(p) >= 20).length), lev: avgOf(lineups, l => l.filter(p => ownL(p) < 8).length), own: avgOf(lineups, l => l.reduce((a, p) => a + ownL(p), 0)), pivots: avgOf(lineups, l => { const ks = new Set(l.map(p => p.key)); return pivotOf.filter(x => !ks.has(x.p.key) && x.alts.some(q => ks.has(q.key))).length; }) }, pivotList: pivotOf.map(x => [x.p.name, x.alts.map(q => q.name)]), srcCounts: tally(ord.map(i => picked[i])), srcPool: tally(items),
     fromYours: lineups.filter(l => yours.has(sigOf(l))).length, yoursCount: mineNow.length,
     screenRoi: avgOf(inSample, roiAvg), freshRoi: avgOf(val, roiAvg), freshCap: avgOf(val, capAvg), poolRoi: avgOf(scr, roiAvg), oosIters: Math.min(4000, iters * 3),
     mineFreshRoi: avgOf(mineVal, roiAvg), mineFreshCap: avgOf(mineVal, capAvg), mineFreshPer: contests.map((c, ci) => avgOf(mineVal, r => r.c[ci].roi)) };
@@ -2922,7 +2942,7 @@ function renderSim() {
     }
     const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
     if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI', top1: 'top 1% rate', win: 'win rate', cash: 'cash rate', true: 'True ROI (uncapped, dupes split)', winAdj: 'win rate (dupe-adjusted)' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The leaders are re-tested twice on new replays and fields before the final cut, so a lineup has to keep scoring well rather than get lucky once. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.shape ? `<br><b>Shape:</b> picks average ${B.shape.chalk.toFixed(1)} chalk players (20%+ owned) and ${B.shape.lev.toFixed(1)} leverage spots (under 8%), ${B.shape.own.toFixed(0)}% total ownership against the field's ${S.sim && S.sim.fieldAvg ? S.sim.fieldAvg.own.toFixed(0) + '%' : '—'}.${B.small ? ' Small field: the pool is built around the chalk, with one leverage spot per build.' : ''}` : ''}${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', core: 'chalk + one leverage builds', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI', top1: 'top 1% rate', win: 'win rate', cash: 'cash rate', true: 'True ROI (uncapped, dupes split)', winAdj: 'win rate (dupe-adjusted)' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The leaders are re-tested twice on new replays and fields before the final cut, so a lineup has to keep scoring well rather than get lucky once. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.shape ? `<br><b>Shape:</b> picks average ${B.shape.chalk.toFixed(1)} chalk players (20%+ owned) and ${B.shape.lev.toFixed(1)} leverage spots (under 8%), ${B.shape.own.toFixed(0)}% total ownership against the field's ${S.sim && S.sim.fieldAvg ? S.sim.fieldAvg.own.toFixed(0) + '%' : '—'}.${B.small ? ` Small field: the pool is built around the chalk, and ${B.shape.pivots != null ? B.shape.pivots.toFixed(1) : 0} spots per lineup on average swap a popular player for a lower-owned look-alike (same position and salary range, similar ceiling, good game).${B.pivotList && B.pivotList.length ? ` Pivots considered: ${B.pivotList.slice(0, 6).map(([c, a]) => `${esc(c)} → ${a.map(esc).join(' / ')}`).join('; ')}.` : ''}` : ''}` : ''}${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', pivot: 'chalk pivots', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
     const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
