@@ -445,6 +445,9 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
       <div class="form">
         <div class="field"><label for="simIters">Iterations</label>
           <select id="simIters" class="sel"><option value="500">500 (fast)</option><option value="1000" selected>1,000</option><option value="2500">2,500</option><option value="5000">5,000 (slow)</option></select></div>
+        <div class="field"><label for="dupMult">Field duplication</label>
+          <select id="dupMult" class="sel"><option value="1" selected>Model (1×)</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="3">3×</option></select>
+          <span class="hint">How many other entries are expected to hold your exact lineup. Duplicates split the prizes they tie for, so every ROI includes them. Raise this if you think the model understates duplication for a slate.</span></div>
         <div class="field"><label for="ctPick">Contest</label>
           <select id="ctPick" class="sel"></select>
           <span class="hint" id="ctInfo"></span></div>
@@ -491,8 +494,8 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
           <span class="hint">Wide adds random-weight builds, contrarian stacks, sim-guided builds, this run's sim-optimal lineups and two-player swaps.</span></div>
         <div class="field"><label for="passes">Stability</label><select id="passes" class="sel"><option value="1" selected>1 pass (fastest)</option><option value="3">3 passes (about 3x slower)</option><option value="5">5 passes (about 5x slower)</option></select>
           <span class="hint">Each extra pass builds more candidates and scores them against another opponent field and another set of replays, then averages.</span></div>
-        <div class="field"><label for="rankBy">Pick by</label><select id="rankBy" class="sel"><option value="roi" selected>ROI</option><option value="top1">Top 1% rate</option><option value="win">Win rate</option><option value="cash">Cash rate</option><option value="true">True ROI (uncapped)</option><option value="roiSolo">ROI ignoring duplicates</option><option value="winSolo">Win rate ignoring duplicates</option></select>
-          <span class="hint">ROI and Win rate split each prize with the field's copies of your exact lineup, which is how popular lineups actually cost you. The 'ignoring duplicates' versions pay as if no one else had it (Gridlock's default).</span></div>
+        <div class="field"><label for="rankBy">Pick by</label><select id="rankBy" class="sel"><option value="roi" selected>ROI</option><option value="top1">Top 1% rate</option><option value="win">Win rate</option><option value="cash">Cash rate</option><option value="winAdj">Win rate (dupe-adjusted)</option><option value="roiSolo">ROI if unique</option></select>
+          <span class="hint">ROI splits each prize with the expected copies of your exact lineup, which is how popular lineups cost you. Win rate (dupe-adjusted) splits first place the same way. ROI if unique pays as if no one else had it. In contests over 2,500 entries the search ranks by robust ROI (finishes above the top 0.1% paid as if they landed there) so a few lucky wins can't decide the picks.</span></div>
         <div class="field"><span class="flabel">Teams to stack</span><div class="chips" id="sbTeams"></div>
           <span class="hint">Pick teams to make every lineup carry at least 3 players from one of them. Max stack size caps how many any one team can have.</span></div>
         <span class="hint" style="font-size:12px;color:var(--muted)">Follows your Optimizer locks, excludes, max per team, min salary, min unique and max exposure.</span>
@@ -555,7 +558,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="lsOutwrap" hidden><textarea class="out" id="lsOutText" readonly aria-label="Late swap CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v41</p>
+<p class="ver" id="ver">Swish v42</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -906,7 +909,7 @@ async function simOptimals(siteKey, rows, sim, { locks = [], maxTeam = 0, maxIte
 //  - consensus: the most obvious good-and-popular lineups (projection x (1 + ownership)), 15% of the
 //    field with geometric decay, scaled up on chalky slates where real fields duplicate more.
 // Ownership uses a separate Large Field column when the projections file has one.
-async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpendFrac = 0.965, calibrate = true, sharpShare = 0.35, consensusShare = 0.15, consensusCount = 8, herdShare = 0.3, herdExp = 2.5, sampleFrac = 0.35, sharpCount = 250, sharpRand = 18, reuse = null, onProgress } = {}) {
+async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpendFrac = 0.965, calibrate = true, sharpShare = 0.35, consensusShare = 0.04, consensusCount = 60, herdShare = 0.3, herdExp = 2.5, sampleFrac = 0.35, sharpCount = 250, sharpRand = 18, reuse = null, onProgress } = {}) {
   const site = SITES[siteKey];
   const rng = mulberry32((seed * 7919 + 13) >>> 0);
   const pool = players.filter(p => p.proj > 0);
@@ -920,8 +923,12 @@ async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpen
   let cO = 0, cS = 0; for (const p of pool) { const o = ownOf(p); if (o > 0) { cO += o * o; cS += o; } }
   const concentration = cS > 0 ? cO / cS : 13;
   const chalkScale = site.showdown ? 1 : Math.min(3, Math.max(0.5, Math.pow(concentration / 13, 2)));
-  consensusShare = Math.min(0.45, consensusShare * Math.sqrt(chalkScale));
-  consensusCount = Math.round(consensusCount * Math.max(1, chalkScale));
+  // NBA calibration: DraftKings NBA main-slate GPP reviews show the single most-played lineup at about
+  // 0.1-0.3% of entries (51 of 26,567; 55 of 39,215; 188 of 73,529 on a very chalky slate). So the
+  // consensus layer is a long, flat list of popular builds (60, decaying 5% each, about 4% of the field
+  // in all), not a few heavy ones: its top lineup lands near 0.2%, up to about 0.35% on chalky slates.
+  consensusShare = Math.min(0.12, consensusShare * Math.sqrt(chalkScale));
+  consensusCount = Math.min(150, Math.round(consensusCount * Math.max(1, chalkScale)));
 
   const hallBits = pool.map((p, i) => { let b = 0; hall.forEach((h, k) => { if (masks[i] & h.mask) b |= 1 << k; }); return b; });
   const salDesc = pool.map(p => p.salary).sort((a, b) => b - a);
@@ -1015,13 +1022,163 @@ async function buildField(siteKey, players, { entries = 10000, seed = 7, minSpen
   const cons = [];
   if (reuse) cons.push(...reuse.consKeys);
   else if (consensusShare > 0) for (const r of generate(siteKey, rowsFor(p => p.proj * (1 + ownOf(p) / 100)), { lineups: consensusCount, uniq: 1, rand: 0, locks: [], excl: [], minExp: {}, maxExp: {}, nodeLimit: 2e5 })) { if (r.error) break; cons.push(r.lineup.map(p => p.key)); }
-  const dec = cons.map((_, i) => Math.pow(0.8, i)), decSum = dec.reduce((a, b) => a + b, 0) || 1;
+  const dec = cons.map((_, i) => Math.pow(0.95, i)), decSum = dec.reduce((a, b) => a + b, 0) || 1;
   cons.forEach((keys, i) => lineups.push({ keys, w: consensusShare * dec[i] / decSum, kind: 'consensus' }));
   // keep total weight at 1 when a layer came out empty
   const W = lineups.reduce((a, l) => a + l.w, 0); lineups.forEach(l => l.w /= W);
   const realized = {}; lineups.forEach(l => l.keys.forEach(k => realized[k] = (realized[k] || 0) + l.w * 100));
   onProgress && onProgress(1);
-  return { sharpKeys: sharp, consKeys: cons, lineups, realized, casualDraws: raw.length, sharpCount: sharp.length, consensusCount: cons.length, consensusShare, concentration };
+  const dupModel = reuse && reuse.dupModel !== undefined ? reuse.dupModel : dupModelFor(siteKey, pool);
+  return { dupModel, sharpKeys: sharp, consKeys: cons, lineups, realized, casualDraws: raw.length, sharpCount: sharp.length, consensusCount: cons.length, consensusShare, concentration };
+}
+
+// ===== Field lineup model for duplicate estimates =====
+// One probability for every legal roster: how likely one entrant is to submit exactly that lineup.
+// Expected copies of a lineup = (entries - 1) x that probability. As in Gridlock, the model has the
+// maximum-entropy form
+//     P(lineup) = (1/Z) x prod(player weights) x exp(-salary left / tau)
+// with the weights and tau FITTED so the lineups it implies reproduce every player's projected
+// ownership and how much of the cap the field spends (DraftKings data: about 64% of lineups within
+// $100 of the cap in Classic, about half above $49,500 in Showdown). NBA differences from Gridlock:
+// slots take players of several positions (so legality is checked against every slot), NBA fields
+// don't build around stacks, so there is no stack term, and Showdown ownership comes from total
+// ownership unless the file has a CPT column. Z sums over every roster exactly by dynamic
+// programming over salary; the share of those rosters that are legal (positions, team and game
+// minimums) is measured on 20,000+ draws from the fitted model.
+const DUP_SAL_TARGET = { classic: 0.64, showdown: 0.5 };
+const _dupCache = new Map();
+function dupModelFor(siteKey, pool) {
+  const ownOf = p => p.ownLarge != null ? p.ownLarge : (p.own || 0);
+  const P = pool.filter(p => p.proj > 0 && p.salary > 0);
+  const key = siteKey + '|' + P.map(p => p.key + ':' + p.salary + ':' + ownOf(p).toFixed(2) + ':' + (p.cptOwn || '')).join(',');
+  if (!_dupCache.has(key)) {
+    let m = null;
+    try { m = SITES[siteKey].showdown ? fitShowdownDup(siteKey, P, ownOf) : fitClassicDup(siteKey, P, ownOf); } catch (e) { m = null; }
+    _dupCache.set(key, m); if (_dupCache.size > 6) _dupCache.delete(_dupCache.keys().next().value);
+  }
+  return _dupCache.get(key);
+}
+const _lgt = p => Math.log(Math.max(1e-6, p) / Math.max(1e-6, 1 - p));
+function _normT(t, sum, cap, floor = 0.0004) { let x = t.slice(); for (let it = 0; it < 25; it++) { const s0 = x.reduce((a, b) => a + b, 0) || 1; x = x.map(v => Math.min(cap, Math.max(floor, v * sum / s0))); } return x; }
+function _drawI(w, rng) { let t = 0; for (let i = 0; i < w.length; i++) t += w[i]; let r = rng() * t; for (let i = 0; i < w.length; i++) { r -= w[i]; if (r <= 0 && w[i] > 0) return i; } for (let i = w.length - 1; i >= 0; i--) if (w[i] > 0) return i; return -1; }
+// prefix tables of elementary symmetric sums over (count, salary units): T[m][k][x] = sum over k-subsets of the
+// first m players with salary x of the product of their weights
+function _espTables(L, wt, su, K, B) {
+  const S = B + 1, layer = (K + 1) * S, T = new Float64Array((L.length + 1) * layer); T[0] = 1;
+  for (let m = 0; m < L.length; m++) {
+    const i = L[m], wi = wt[i], si = su[i], o0 = m * layer, o1 = (m + 1) * layer;
+    T.copyWithin(o1, o0, o0 + layer);
+    if (si > B) continue;
+    for (let k = 0; k < K; k++) { const src = o0 + k * S, dst = o1 + (k + 1) * S + si; for (let x = B - si; x >= 0; x--) { const v = T[src + x]; if (v) T[dst + x] += wi * v; } }
+  }
+  return { T, S, layer, L };
+}
+function _backDraw(E, wt, su, K, x, rng) {
+  const out = []; let k = K;
+  for (let m = E.L.length; m >= 1 && k > 0; m--) {
+    const i = E.L[m - 1], si = su[i], cur = E.T[m * E.layer + k * E.S + x];
+    const take = x - si >= 0 ? wt[i] * E.T[(m - 1) * E.layer + (k - 1) * E.S + x - si] : 0;
+    if (cur > 0 && rng() * cur < take) { out.push(i); k--; x -= si; }
+  }
+  return k === 0 ? out : null;
+}
+function fitClassicDup(siteKey, P, ownOf, { rounds = 12, draws = 10000, seed = 29, salaryTarget = DUP_SAL_TARGET.classic, tau0 = 300 } = {}) {
+  const site = SITES[siteKey], K = site.size, n = P.length; if (n < K + 2) return null;
+  const U = 100, capU = Math.floor(site.cap / U), su = P.map(p => Math.round(p.salary / U));
+  const t = _normT(P.map(p => ownOf(p) / 100), K, 0.97), lw = t.map(v => Math.log(v));
+  const hall = hallConstraints(site), masks = P.map(p => posMask(p.pos));
+  const legal = idx => {
+    const tc = {}; for (const i of idx) { tc[P[i].team] = (tc[P[i].team] || 0) + 1; if (tc[P[i].team] > site.maxTeam) return false; }
+    if (Object.keys(tc).length < site.minTeams) return false;
+    if (site.minGames > 1 && new Set(idx.map(i => P[i].game)).size < site.minGames) return false;
+    for (const h of hall) { let c = 0; for (const i of idx) if (masks[i] & h.mask) c++; if (c < h.need) return false; }
+    return true;
+  };
+  const L = P.map((_, i) => i), rng = mulberry32(seed);
+  let tau = tau0, fit = null, logZall = 0, accept = 1;
+  for (let r = 0; r < rounds; r++) {
+    const last = r === rounds - 1, wt = lw.map(Math.exp);
+    const E = _espTables(L, wt, su, K, capU), top = n * E.layer + K * E.S;
+    const fin = new Float64Array(capU + 1); let z = 0;
+    for (let x = 0; x <= capU; x++) { const v = E.T[top + x]; if (v) { fin[x] = v * Math.exp(-(capU - x) * U / tau); z += fin[x]; } }
+    logZall = Math.log(z);
+    const D = last ? draws * 2 : draws, cnt = new Float64Array(n); let ok = 0, tot = 0, hi = 0;
+    for (let d = 0; d < D; d++) {
+      const x = _drawI(fin, rng); if (x < 0) continue;
+      const idx = _backDraw(E, wt, su, K, x, rng); if (!idx) continue; tot++;
+      if (!legal(idx)) continue; ok++; for (const i of idx) cnt[i]++; if ((capU - x) * U <= 100) hi++;
+    }
+    accept = ok / Math.max(1, tot);
+    let err = 0; for (let i = 0; i < n; i++) err += Math.abs(cnt[i] / Math.max(1, ok) - t[i]);
+    fit = { ownErrPts: 100 * err / n, salaryShare: hi / Math.max(1, ok), legalShare: accept };
+    if (last) break;
+    const st = 0.9 / (1 + r / 5);
+    for (let i = 0; i < n; i++) lw[i] += Math.max(-1, Math.min(1, st * Math.log((t[i] + 1e-4) / (cnt[i] / Math.max(1, ok) + 1e-4))));
+    tau = Math.min(20000, Math.max(30, tau * Math.exp(0.6 / (1 + r / 3) * (_lgt(fit.salaryShare) - _lgt(salaryTarget)))));
+  }
+  const logZ = logZall + Math.log(Math.max(1e-9, accept)), ix = new Map(P.map((p, i) => [p.key, i]));
+  // draw D legal lineups from the fitted model (used to check the fit)
+  const sample = (D, sd = 1) => { const wt = lw.map(Math.exp), E = _espTables(L, wt, su, K, capU), top = n * E.layer + K * E.S, fin = new Float64Array(capU + 1);
+    for (let x = 0; x <= capU; x++) fin[x] = E.T[top + x] * Math.exp(-(capU - x) * U / tau);
+    const rg = mulberry32(sd), own = new Float64Array(n), out = []; let ok = 0, hi = 0;
+    while (ok < D) { const x = _drawI(fin, rg), idx = _backDraw(E, wt, su, K, x, rg); if (!idx || !legal(idx)) continue; ok++; idx.forEach(i => own[i]++); if ((capU - x) * U <= 100) hi++; if (out.length < 4000) out.push(idx.map(i => P[i].key)); }
+    return { own: new Map(P.map((p, i) => [p.key, own[i] / ok])), salaryShare: hi / ok, lineups: out }; };
+  return { showdown: false, info: { ...fit, showdown: false, tau, players: n, ownSum: P.reduce((a, p) => a + ownOf(p), 0), slots: K }, sample,
+    logProb(keys) { const idx = keys.map(k => ix.get(k)); if (idx.length !== K || idx.some(i => i == null)) return -Infinity;
+      const s0 = idx.reduce((a, i) => a + su[i], 0); if (s0 > capU) return -Infinity;
+      return idx.reduce((a, i) => a + lw[i], 0) - (capU - s0) * U / tau - logZ; } };
+}
+function fitShowdownDup(siteKey, P, ownOf, { rounds = 14, draws = 10000, seed = 31, salaryTarget = DUP_SAL_TARGET.showdown, tau0 = 1000, cptOf = null } = {}) {
+  const site = SITES[siteKey], n = P.length, teams = [...new Set(P.map(p => p.team))]; if (n < 7) return null;
+  const U = 50, capU = Math.floor(site.cap / U), fsu = P.map(p => Math.round(p.salary / U)), csu = P.map(p => Math.round((p.cptSalary || p.salary * 1.5) / U));
+  const cptO = cptOf || (p => p.cptOwn || 0), hasCpt = P.some(p => cptO(p) > 0), tot = P.map(p => ownOf(p) / 100);
+  const cT = _normT(P.map((p, i) => hasCpt ? cptO(p) / 100 : tot[i]), 1, 0.9), fT = _normT(P.map((p, i) => hasCpt ? Math.max(0, tot[i] - cptO(p) / 100) : tot[i]), 5, 0.97);
+  const lc = cT.map(Math.log), lf = fT.map(Math.log), rng = mulberry32(seed);
+  let tau = tau0, fit = null, logZall = 0, accept = 1;
+  const forCpt = (c, wf) => { const B = capU - csu[c]; if (B < 0) return null; const L = P.map((_, i) => i).filter(i => i !== c && fsu[i] <= B);
+    const E = _espTables(L, wf, fsu, 5, B), top = L.length * E.layer + 5 * E.S, fin = new Float64Array(B + 1); let z = 0;
+    for (let x = 0; x <= B; x++) { const v = E.T[top + x]; if (v) { fin[x] = v * Math.exp(-(B - x) * U / tau); z += fin[x]; } } return { E, fin, z, B }; };
+  for (let r = 0; r < rounds; r++) {
+    const last = r === rounds - 1, wf = lf.map(Math.exp), Zc = new Float64Array(n), per = new Int32Array(n);
+    const dp = P.map((_, c) => forCpt(c, wf));
+    for (let c = 0; c < n; c++) if (dp[c]) Zc[c] = Math.exp(lc[c]) * dp[c].z;
+    logZall = Math.log(Zc.reduce((a, b) => a + b, 0));
+    const D = last ? draws * 2 : draws; for (let d = 0; d < D; d++) { const c = _drawI(Zc, rng); if (c >= 0) per[c]++; }
+    const cc = new Float64Array(n), fc = new Float64Array(n); let ok = 0, all = 0, hi = 0;
+    for (let c = 0; c < n; c++) for (let m = 0; m < per[c]; m++) {
+      const d = dp[c], x = _drawI(d.fin, rng); if (x < 0) continue;
+      const idx = _backDraw(d.E, wf, fsu, 5, x, rng); if (!idx) continue; all++;
+      if (teams.length > 1 && new Set([c, ...idx].map(i => P[i].team)).size < 2) continue;
+      ok++; cc[c]++; idx.forEach(i => fc[i]++); if ((d.B - x) * U < 500) hi++;
+    }
+    accept = ok / Math.max(1, all);
+    let err = 0; for (let i = 0; i < n; i++) err += Math.abs((cc[i] + fc[i]) / Math.max(1, ok) - (cT[i] + fT[i]));
+    fit = { ownErrPts: 100 * err / n, salaryShare: hi / Math.max(1, ok), legalShare: accept, captainOwnership: hasCpt };
+    if (last) break;
+    const st = 0.9 / (1 + r / 5);
+    for (let i = 0; i < n; i++) { lc[i] += Math.max(-1, Math.min(1, st * Math.log((cT[i] + 1e-4) / (cc[i] / Math.max(1, ok) + 1e-4)))); lf[i] += Math.max(-1, Math.min(1, st * Math.log((fT[i] + 1e-4) / (fc[i] / Math.max(1, ok) + 1e-4)))); }
+    tau = Math.min(20000, Math.max(80, tau * Math.exp(0.6 / (1 + r / 3) * (_lgt(fit.salaryShare) - _lgt(salaryTarget)))));
+  }
+  const logZ = logZall + Math.log(Math.max(1e-9, accept)), ix = new Map(P.map((p, i) => [p.key, i]));
+  const sample = (D, sd = 1) => { const wf = lf.map(Math.exp), dp = P.map((_, c) => forCpt(c, wf)), Zc = dp.map((d, c) => d ? Math.exp(lc[c]) * d.z : 0);
+    const rg = mulberry32(sd), cpt = new Float64Array(n), own = new Float64Array(n), out = []; let ok = 0, hi = 0;
+    while (ok < D) { const c = _drawI(Zc, rg), d = dp[c], x = _drawI(d.fin, rg), idx = _backDraw(d.E, wf, fsu, 5, x, rg); if (!idx) continue;
+      if (teams.length > 1 && new Set([c, ...idx].map(i => P[i].team)).size < 2) continue; ok++; cpt[c]++; own[c]++; idx.forEach(i => own[i]++); if ((d.B - x) * U < 500) hi++; if (out.length < 4000) out.push([P[c].key, ...idx.map(i => P[i].key)]); }
+    return { own: new Map(P.map((p, i) => [p.key, own[i] / ok])), cpt: new Map(P.map((p, i) => [p.key, cpt[i] / ok])), salaryShare: hi / ok, lineups: out }; };
+  return { showdown: true, info: { ...fit, showdown: true, tau, players: n, ownSum: P.reduce((a, p) => a + ownOf(p), 0), slots: 6 }, sample,
+    logProb(keys) { if (keys.length !== 6) return -Infinity; const c = ix.get(keys[0]), F = keys.slice(1).map(k => ix.get(k)); if (c == null || F.some(i => i == null)) return -Infinity;
+      const left = capU - csu[c] - F.reduce((a, i) => a + fsu[i], 0); if (left < 0) return -Infinity;
+      return lc[c] + F.reduce((a, i) => a + lf[i], 0) - left * U / tau - logZ; } };
+}
+// "Field duplication" setting: scales every expected-duplicate count
+function dupMultNow() { const el = typeof document !== 'undefined' && document.getElementById('dupMult'); const v = el ? parseFloat(el.value) : 1; return isFinite(v) && v > 0 ? v : 1; }
+// Support points for the number of extra copies: Poisson for small means, Gauss-Hermite around a normal for big ones
+function dupSupport(lam) {
+  if (lam < 1e-4) return [[1, 0]];
+  const pts = [];
+  if (lam <= 25) { let p = Math.exp(-lam), cum = 0; for (let k = 0; k < 90 && cum < 0.9995; k++) { if (k > 0) p *= lam / k; if (p > 1e-5) pts.push([p, k]); cum += p; } }
+  else { const sd = Math.sqrt(lam); for (const [x, w] of [[-2.02018, 0.01995], [-0.95857, 0.39362], [0, 0.94531], [0.95857, 0.39362], [2.02018, 0.01995]]) pts.push([w / 1.77245, Math.max(0, lam + Math.SQRT2 * sd * x)]); }
+  const z = pts.reduce((a, q) => a + q[0], 0) || 1; return pts.map(([p, d]) => [p / z, d]);
 }
 
 // Payout table: DraftKings "Prize Payouts" text pasted by the user, or a typical GPP shape.
@@ -1136,11 +1293,24 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress, 
   const fCols = field.lineups.map(l => l.keys.map(k => sim.idx.get(k)));
   const fw = field.lineups.map(l => l.w);
   const sigOf = keys => sd ? keys[0] + '|' + keys.slice(1).sort().join(',') : keys.slice().sort().join(',');
-  const fieldSig = new Map(); field.lineups.forEach((l, j) => { const g = sigOf(l.keys); fieldSig.set(g, (fieldSig.get(g) || 0) + fw[j]); });
+  // Exact copies in the sampled field. Optimizer-user ('sharp') lineups each stand for many different real
+  // lineups built with randomness, so a match with one of them is not counted as copies of yours: those
+  // entries are treated as scoring the same as you without sharing your exact roster.
+  const fieldSig = new Map(), sharpSig = new Map();
+  field.lineups.forEach((l, j) => { const g = sigOf(l.keys); if (l.kind === 'sharp') sharpSig.set(g, (sharpSig.get(g) || 0) + fw[j]); else fieldSig.set(g, (fieldSig.get(g) || 0) + fw[j]); });
   const mCols = mine.map(l => l.map(k => sim.idx.get(k)));
-  const mDup = mine.map(l => fieldSig.get(sigOf(l)) || 0); // share of the field holding this exact lineup
+  const mDup = mine.map(l => fieldSig.get(sigOf(l)) || 0); // share of the sampled field holding this exact lineup
+  const mSharp = mine.map(l => sharpSig.get(sigOf(l)) || 0);
+  // Expected copies of each lineup among the other entrants (see the field lineup model above). Copies the
+  // sampled field carries explicitly already tie with you; the rest are added as a random number of extra
+  // tied entries, and the whole tie group splits the prizes for the places it fills. So every ROI below
+  // includes duplicates; 'solo' numbers are the same finishes as if no one else had the lineup.
+  const mult = dupMultNow(), DM = field.dupModel;
+  const mP = mine.map(l => { if (!DM) return 0; const lp = DM.logProb(l); return isFinite(lp) ? Math.exp(lp) : 0; });
+  const dupX = mine.map((l, m) => CS.map(C => { const det = mDup[m] * C.E, lam = C.E * mP[m]; const extra = Math.max(0, lam - det) * mult + det * (mult - 1);
+    return { total: det + extra, sup: dupSupport(extra) }; }));
   const M = mine.length, F = fCols.length, N = sim.iters;
-  const res = mine.map(l => ({ scores: new Float32Array(N), c: CS.map(() => ({ paySolo: 0, winSolo: 0, payCap: 0, payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0, bk: { win: 0, top1: 0, top10: 0, cash: 0 }, topN: 0, topSum: new Float64Array(l.length) })) }));
+  const res = mine.map(l => ({ scores: new Float32Array(N), c: CS.map(() => ({ paySolo: 0, winSolo: 0, winRaw: 0, payCap: 0, payout: 0, cash: 0, top1: 0, win: 0, rankSum: 0, bk: { win: 0, top1: 0, top10: 0, cash: 0 }, topN: 0, topSum: new Float64Array(l.length) })) }));
   const fs = new Float64Array(F), order = new Uint32Array(F), cum = new Float64Array(F);
   let last = performance.now();
   for (let it = 0; it < N; it++) {
@@ -1164,21 +1334,35 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress, 
       while (lo < hi) { const mid = (lo + hi) >> 1; if (fs[order[mid]] > s + EPS) lo = mid + 1; else hi = mid; }
       let lo2 = lo, hi2 = F;
       while (lo2 < hi2) { const mid = (lo2 + hi2) >> 1; if (fs[order[mid]] >= s - EPS) lo2 = mid + 1; else hi2 = mid; }
-      let aboveW = lo ? cum[lo - 1] : 0; const tiedW = (lo2 ? cum[lo2 - 1] : 0) - aboveW;
+      let aboveW = lo ? cum[lo - 1] : 0; let tiedW = (lo2 ? cum[lo2 - 1] : 0) - aboveW;
+      if (mSharp[m]) { tiedW = Math.max(0, tiedW - mSharp[m]); aboveW += mSharp[m] / 2; }
       if (tail !== 'none' && s > xK && tailK > 0) aboveW = qK * (tail === 'exp' ? Math.exp(-(s - xK) / beta) : normTail((s - mu) / fsd) / tailK);
       for (let ci = 0; ci < CS.length; ci++) {
         const C = CS[ci], r = R.c[ci];
         const above = aboveW * C.E, tied = tiedW * C.E;
         const rank = Math.floor(above) + 1, rankEnd = Math.max(rank, Math.round(above + tied) + 1);
-        const p = payRange(C, rank, rankEnd);
+        let p, cashF, wAdj, pCap;
+        if (rank > C.paidMax) { p = 0; cashF = 0; pCap = 0; wAdj = above < 0.5 ? 1 / (rankEnd - rank + 1) : 0; if (wAdj) { wAdj = 0; for (const [pr, d] of dupX[m][ci].sup) wAdj += pr / (rankEnd - rank + 1 + d); } }
+        else {
+          p = 0; cashF = 0; wAdj = 0; pCap = 0;
+          for (const [pr, d] of dupX[m][ci].sup) {
+            const e0 = rankEnd + Math.floor(d), fr = d - Math.floor(d), g0 = e0 - rank + 1;
+            const pg = e => payRange(C, rank, e), cf = e => Math.max(0, Math.min(e, C.paidMax) - rank + 1) / (e - rank + 1);
+            const capG = e => rank >= C.capRank ? pg(e) : payRange(C, C.capRank, Math.max(C.capRank, e + C.capRank - rank));
+            p += pr * (fr ? (1 - fr) * pg(e0) + fr * pg(e0 + 1) : pg(e0));
+            pCap += pr * (fr ? (1 - fr) * capG(e0) + fr * capG(e0 + 1) : capG(e0));
+            cashF += pr * (fr ? (1 - fr) * cf(e0) + fr * cf(e0 + 1) : cf(e0));
+            if (above < 0.5) wAdj += pr * (fr ? (1 - fr) / g0 + fr / (g0 + 1) : 1 / g0);
+          }
+        }
         r.rankSum += rank; r.payout += p;
         // 'solo' payout: as if nobody else entered this exact lineup (ties with other lineups still split)
         const soloEnd = Math.max(rank, Math.round(above + Math.max(0, tied - mDup[m] * C.E)) + 1);
         r.paySolo += payRange(C, rank, soloEnd); if (above < 0.5) r.winSolo += 1 / Math.max(1, soloEnd - rank + 1);
         // robust payout: any finish better than the top 0.1% is paid as if it landed exactly there
-        r.payCap += rank >= C.capRank ? p : payRange(C, C.capRank, Math.max(C.capRank, rankEnd + C.capRank - rank));
-        if (rank <= C.paidMax) r.cash++;
-        if (above < 0.5) r.win += 1 / Math.max(1, rankEnd - rank + 1);
+        r.payCap += pCap;
+        r.cash += cashF;
+        r.win += wAdj; if (above < 0.5) r.winRaw++;
         if (p > 0) { if (rank === 1) r.bk.win += p; else if (rank <= C.top1) r.bk.top1 += p; else if (rank <= C.top10) r.bk.top10 += p; else r.bk.cash += p; }
         if (rank <= C.top1) { r.top1++; r.topN++; const c = mCols[m]; for (let k = 0; k < c.length; k++) r.topSum[k] += sim.data[o + c[k]] * (sd && k === 0 ? 1.5 : 1); }
       }
@@ -1187,12 +1371,11 @@ async function contestSimMulti(siteKey, sim, mine, field, contests, onProgress, 
   }
   return res.map((R, m) => {
     const s = Array.from(R.scores).sort((a, b) => a - b); const q = x => s[Math.min(N - 1, Math.floor(x * N))];
-    const dupW = fieldSig.get(sigOf(mine[m])) || 0;
     return { mean: s.reduce((a, b) => a + b, 0) / N, p10: q(0.1), p50: q(0.5), p90: q(0.9), p99: q(0.99),
-      c: R.c.map((r, ci) => { const avgPay = r.payout / N, fee = CS[ci].fee; return { avgPay, roi: fee ? (avgPay - fee) / fee * 100 : 0, roiCap: fee ? (r.payCap / N - fee) / fee * 100 : 0, roiSolo: fee ? (r.paySolo / N - fee) / fee * 100 : 0, winSolo: r.winSolo / N * 100, dupes: dupW * CS[ci].E,
+      c: R.c.map((r, ci) => { const avgPay = r.payout / N, fee = CS[ci].fee; return { avgPay, roi: fee ? (avgPay - fee) / fee * 100 : 0, roiCap: fee ? (r.payCap / N - fee) / fee * 100 : 0, roiSolo: fee ? (r.paySolo / N - fee) / fee * 100 : 0, winSolo: r.winSolo / N * 100, winRaw: r.winRaw / N * 100, dupes: dupX[m][ci].total,
         cash: r.cash / N * 100, top1: r.top1 / N * 100, win: r.win / N * 100, avgRank: r.rankSum / N,
         bk: { win: r.bk.win / N, top1: r.bk.top1 / N, top10: r.bk.top10 / N, cash: r.bk.cash / N },
-        dups: dupW * CS[ci].E, topN: r.topN, topAvg: r.topN ? Array.from(r.topSum, x => x / r.topN) : null }; }) };
+        dups: dupX[m][ci].total, topN: r.topN, topAvg: r.topN ? Array.from(r.topSum, x => x / r.topN) : null }; }) };
   });
 }
 
@@ -1685,7 +1868,7 @@ function restore() {
   const st = store.get('settings');
   // correlation sliders were re-based in v33 (role-share model); older saved values don't carry over
   if (st && st.corrModel !== 2) { delete st.paceCorr; delete st.usageCorr; }
-  if (st) { S.sbTeams = Array.isArray(st.sbTeams) ? st.sbTeams : []; delete st.sbTeams; if (st.rankBy === 'winAdj') st.rankBy = 'win'; if (!['roi', 'top1', 'win', 'cash', 'true', 'roiSolo', 'winSolo'].includes(st.rankBy)) st.rankBy = 'roi'; }
+  if (st) { S.sbTeams = Array.isArray(st.sbTeams) ? st.sbTeams : []; delete st.sbTeams; if (st.rankBy === 'true') st.rankBy = 'roi'; if (st.rankBy === 'winSolo') st.rankBy = 'win'; if (!['roi', 'top1', 'win', 'cash', 'winAdj', 'roiSolo'].includes(st.rankBy)) st.rankBy = 'roi'; }
   if (st) for (const [k, v] of Object.entries(st)) { const el = document.getElementById(k); if (!el || v == null) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
   const s = store.get('slate');
   if (s && s.players && s.players.length && SITES[s.site]) { Object.assign(S, s, { gamesOff: new Set(s.gamesOff || []) }); }
@@ -1702,7 +1885,7 @@ function restore() {
 function settings() {
   const num = id => { const v = $('#' + id).value; return v === '' ? null : +v; };
   return { nLineups: num('nLineups'), uniq: num('uniq'), rand: num('rand'), maxTeam: num('maxTeam'), minSal: num('minSal'), maxOwn: num('maxOwn'), globalMax: num('globalMax'), lineType: $('#lineType').value, ceilW: num('ceilW'), smallFade: num('smallFade'), largeFade: num('largeFade'), minProjG: num('minProjG'), skipOut: $('#skipOut').checked, lateSwap: $('#lateSwap').checked, vegasAdj: $('#vegasAdj').checked, vegasW: num('vegasW'), simVegas: $('#simVegas').checked,
-    simIters: $('#simIters').value, bestN: num('bestN'), passes: $('#passes').value, sbStack: num('sbStack'), sbBreadth: $('#sbBreadth').value, sbTeams: (S.sbTeams || []).slice(), rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2, lsObj: $('#lsObj').value, lsMax: $('#lsMax').value, lsGain: num('lsGain'), lsScope: $('#lsScope').value };
+    simIters: $('#simIters').value, dupMult: $('#dupMult').value, bestN: num('bestN'), passes: $('#passes').value, sbStack: num('sbStack'), sbBreadth: $('#sbBreadth').value, sbTeams: (S.sbTeams || []).slice(), rankBy: $('#rankBy').value, entries: num('entries'), fee: num('fee'), payText: $('#payText').value, sharp: num('sharp'), projConf: num('projConf'), doOpt: $('#doOpt').checked, paceCorr: num('paceCorr'), usageCorr: num('usageCorr'), corrModel: 2, lsObj: $('#lsObj').value, lsMax: $('#lsMax').value, lsGain: num('lsGain'), lsScope: $('#lsScope').value };
 }
 
 // ===== notices =====
@@ -1974,8 +2157,8 @@ function renderLineupsView() {
   stats.innerHTML = [['Lineups', list.length], ['Avg proj', f1(avg(x => proj(x.l)))], ['Avg salary', money(avg(x => sal(x.l)))], ['Avg own', Math.round(avg(x => own(x.l))) + '%']]
     .concat(simL.length ? [[ALLRUN ? 'Avg ROI' : 'Sim-built avg ROI', sgnPct(simL.reduce((a, x) => a + x.st.roi, 0) / simL.length)], ['Robust ROI', sgnPct(simL.reduce((a, x) => a + x.st.roiCap, 0) / simL.length)]] : [])
     .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
-  body.innerHTML = `<table class="simt"><thead><tr><th>#</th>${LU_SET === 'all' ? '<th>From</th>' : ''}<th>Lineup</th><th class="n">Salary</th><th class="n">Proj</th><th class="n">Own</th>${withSim ? '<th class="n">ROI</th><th class="n">Robust</th><th class="n">Cash</th><th class="n">Top 1%</th>' : ''}</tr></thead><tbody>` +
-    list.map((x, i) => `<tr><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LU_SET === 'all' ? `<td class="pos">${x.src === 'sim' ? 'Sim-built' : 'Optimized'}</td>` : ''}<td class="lnames">${lineupNames(x.l)}</td><td class="n">${money(sal(x.l))}</td><td class="n">${f1(proj(x.l))}</td><td class="n">${f1(own(x.l))}%</td>${withSim ? (x.st ? `<td class="n">${roiCell(x.st.roi)}</td><td class="n">${sgnPct(x.st.roiCap)}</td><td class="n">${pctFmt(x.st.cash)}</td><td class="n">${pctFmt(x.st.top1)}</td>` : '<td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td>') : ''}</tr>`).join('') + '</tbody></table>';
+  body.innerHTML = `<table class="simt"><thead><tr><th>#</th>${LU_SET === 'all' ? '<th>From</th>' : ''}<th>Lineup</th><th class="n">Salary</th><th class="n">Proj</th><th class="n">Own</th>${withSim ? '<th class="n">ROI</th><th class="n">Robust</th><th class="n">Cash</th><th class="n">Top 1%</th><th class="n">Dupes</th>' : ''}</tr></thead><tbody>` +
+    list.map((x, i) => `<tr><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LU_SET === 'all' ? `<td class="pos">${x.src === 'sim' ? 'Sim-built' : 'Optimized'}</td>` : ''}<td class="lnames">${lineupNames(x.l)}</td><td class="n">${money(sal(x.l))}</td><td class="n">${f1(proj(x.l))}</td><td class="n">${f1(own(x.l))}%</td>${withSim ? (x.st ? `<td class="n">${roiCell(x.st.roi)}</td><td class="n">${sgnPct(x.st.roiCap)}</td><td class="n">${pctFmt(x.st.cash)}</td><td class="n">${pctFmt(x.st.top1)}</td><td class="n">${dupFmt(x.st.dupes)}</td>` : '<td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td><td class="n pos">–</td>') : ''}</tr>`).join('') + '</tbody></table>';
   foot.hidden = false;
   $('#luClear').hidden = LU_SET === 'all';
   $('#luSimAll').hidden = LU_SET !== 'all';
@@ -2471,16 +2654,16 @@ async function runSim(mode, lineupsOverride) {
     });
     let built = null;
     if (buildBest) built = await buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, field, contests, iters, msg, vmap, runSeed, maxEntries });
-    S.sim = { fieldInfo: { consensusShare: field.consensusShare, concentration: field.concentration }, conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
+    S.sim = { dupInfo: field.dupModel ? field.dupModel.info : null, dupMult: dupMultNow(), fieldInfo: { consensusShare: field.consensusShare, concentration: field.concentration }, conf: st.projConf ?? 30, vegas: !!vmap, vegasAdj: !!(st.vegasAdj && vegasMap()), sig: slateSig(), site: S.site, iters, contests: contests.map(({ payouts, ...c }) => c), built,
       players, opt, mine, fieldAvg, mineLineups: mineL.slice(), mineStale: false, seconds: (performance.now() - t0) / 1000, sharp: st.sharp ?? 35 };
     if (lineupsOverride && mine.length) {
       const sig = l => l.map(p => p.key).sort().join(',');
-      const stats = {}; mine.forEach((r, i) => { stats[sig(mineL[i])] = { roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }; });
+      const stats = {}; mine.forEach((r, i) => { stats[sig(mineL[i])] = { dupes: r.c.reduce((a, x) => a + (x.dupes || 0), 0) / r.c.length, roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }; });
       S.bank = Object.assign(S.bank || {}, bankBase(), { allStats: stats, allAt: Date.now(), allContests: contests.map(c => c.short), allIters: iters });
       S.simTab = 'mine'; save();
     }
     if (buildBest && built && built.lineups.length) {
-      const per = built.mine.map(r => ({ roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }));
+      const per = built.mine.map(r => ({ dupes: r.c.reduce((a, x) => a + (x.dupes || 0), 0) / r.c.length, roi: r.c.reduce((a, x) => a + x.roi, 0) / r.c.length, roiCap: r.c.reduce((a, x) => a + x.roiCap, 0) / r.c.length, cash: r.c.reduce((a, x) => a + x.cash, 0) / r.c.length, top1: r.c.reduce((a, x) => a + x.top1, 0) / r.c.length }));
       S.bank = Object.assign(S.bank || {}, bankBase(), { sim: built.lineups.map(l => l.map(p => p.key)), simStats: per, simAt: Date.now(), simContests: contests.map(c => c.short) }); lsKeepSnap();
       save();
     }
@@ -2650,7 +2833,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   const poolL = [...cand.values()];
   if (!poolL.length) throw new Error(allowedSet ? `No candidate lineups fit with ${STACK_MIN}+ players from ${allowed.join('/')} under your settings.` : 'No candidate lineups fit your Optimizer settings.');
   const keysOf = L => L.map(l => l.map(p => p.key));
-  const metric = ({ avgroi: 'roi', blend: 'roi', winAdj: 'win' })[st.rankBy] || st.rankBy || 'roi';
+  const metric = ({ avgroi: 'roi', blend: 'roi', true: 'roi', winSolo: 'win' })[st.rankBy] || st.rankBy || 'roi';
   msg(`Stage 1 of 4: scoring ${poolL.length.toLocaleString()} candidates in the contest simulation${P > 1 ? ` (${P} passes, each with its own field and replays)` : ''}…`);
   const passSims = [sim], passFields = [field];
   for (let pp = 1; pp < P; pp++) {
@@ -2658,7 +2841,7 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
     passSims.push(await simulateScores(simPool, { iters, seed: runSeed + 1000 * pp, teamW: 0, gameW: (st.paceCorr ?? 5) / 100, usageW: (st.usageCorr ?? 65) / 100, vegas: vmap }));
     passFields.push(await buildField(S.site, fieldPool, { seed: (runSeed % 100000) + 7 + pp, entries: maxEntries, sharpShare: (st.sharp ?? 35) / 100 }));
   }
-  const KS = ['roi', 'roiCap', 'roiSolo', 'cash', 'top1', 'win', 'winSolo', 'avgPay', 'dupes'];
+  const KS = ['roi', 'roiCap', 'roiSolo', 'cash', 'top1', 'win', 'winSolo', 'winRaw', 'avgPay', 'dupes'];
   const evalMany = async (keys, from, to) => {
     let acc = null;
     for (let pp = 0; pp < P; pp++) {
@@ -2672,18 +2855,24 @@ async function buildBestLineups({ site, st, pool, fieldPool, simPool, sim, opt, 
   // Scorer (as in Gridlock): z-scores across the candidate pool. ROI is soft-winsorized at the 5th/95th
   // percentile (beyond it a lineup still ranks by raw ROI at 15% weight, so the top isn't a tie);
   // True ROI only at the 1st/99th. Win rate is zero for most lineups, so top 1% rate breaks ties.
+  // Ranking ROI. In big top-heavy contests most of a lineup's ROI comes from a handful of first-place
+  // finishes, so ranking thousands of candidates by it mostly ranks luck: low-owned builds that won a few
+  // replays look great and then fall apart on fresh ones (in a 16K test, 95% in the search vs 23% after).
+  // Above 2,500 entries the search ranks by robust ROI (finishes better than the top 0.1% paid as if they
+  // landed there), which keeps the duplicate-split prizes but not the lottery. The ROI shown is unchanged.
+  const RK = (maxEntries || 0) >= 2500 ? 'roiCap' : 'roi';
   const zs = contests.map((c, ci) => {
     const st2 = xs => { const m = xs.reduce((a, v) => a + v, 0) / xs.length; const sd = Math.sqrt(xs.reduce((a, v) => a + (v - m) ** 2, 0) / xs.length) || 1; return { m, sd }; };
     const soft = (k, q) => { const v = scr.map(r => r.c[ci][k]).sort((x, y) => x - y), lo = v[Math.floor(v.length * q)], hi = v[Math.min(v.length - 1, Math.floor(v.length * (1 - q)))]; return x => x > hi ? hi + 0.15 * (x - hi) : x < lo ? lo + 0.15 * (x - lo) : x; };
-    const cR = soft('roi', 0.05), cS = soft('roiSolo', 0.05), cT = soft('roi', 0.01);
-    return { cR, cS, cT, roi: st2(scr.map(r => cR(r.c[ci].roi))), solo: st2(scr.map(r => cS(r.c[ci].roiSolo))), tru: st2(scr.map(r => cT(r.c[ci].roi))), cash: st2(scr.map(r => r.c[ci].cash)), top1: st2(scr.map(r => r.c[ci].top1)), win: st2(scr.map(r => r.c[ci].winSolo)), winA: st2(scr.map(r => r.c[ci].win)) };
+    const cR = soft(RK, 0.05), cS = soft('roiSolo', 0.05), cT = soft('roi', 0.01);
+    return { cR, cS, cT, roi: st2(scr.map(r => cR(r.c[ci][RK]))), solo: st2(scr.map(r => cS(r.c[ci].roiSolo))), tru: st2(scr.map(r => cT(r.c[ci].roi))), cash: st2(scr.map(r => r.c[ci].cash)), top1: st2(scr.map(r => r.c[ci].top1)), win: st2(scr.map(r => r.c[ci].winRaw)), winA: st2(scr.map(r => r.c[ci].win)) };
   });
   const score = r => r.c.reduce((a, x, ci) => {
     const Z = zs[ci], z = (v, s) => (v - s.m) / s.sd;
     // ROI and Win rate split prizes with the field's copies of the lineup (ownership's real cost in a
     // single-entry contest); the 'ignoring duplicates' versions pay as if no one else had it, as Gridlock does.
-    const zr = z(Z.cR(x.roi), Z.roi), zt = z(Z.cT(x.roi), Z.tru), z1 = z(x.top1, Z.top1);
-    return a + (metric === 'cash' ? z(x.cash, Z.cash) : metric === 'top1' ? z1 : metric === 'winSolo' ? z(x.winSolo, Z.win) + 0.02 * z1 : metric === 'win' ? z(x.win, Z.winA) + 0.02 * zr : metric === 'roiSolo' ? z(Z.cS(x.roiSolo), Z.solo) : metric === 'true' ? zt : zr);
+    const zr = z(Z.cR(x[RK]), Z.roi), zt = z(Z.cT(x.roi), Z.tru), z1 = z(x.top1, Z.top1);
+    return a + (metric === 'cash' ? z(x.cash, Z.cash) : metric === 'top1' ? z1 : metric === 'win' ? z(x.winRaw, Z.win) + 0.02 * z1 : metric === 'winAdj' ? z(x.win, Z.winA) + 0.02 * zr : metric === 'roiSolo' ? z(Z.cS(x.roiSolo), Z.solo) : metric === 'true' ? zt : zr);
   }, 0) / r.c.length;
   // w = how many replay sets back this lineup's numbers; tier = how many re-tests it has survived
   const items = poolL.map((x, i) => ({ l: x.l, src: x.src, r: scr[i], sc: score(scr[i]), w: P, tier: 0 }));
@@ -2859,6 +3048,15 @@ function driversHTML(R, rows, avgRoi) {
   </div></div>`;
 }
 
+const dupFmt = d => d == null ? '–' : d < 0.005 ? '<0.01' : d < 10 ? d.toFixed(2) : Math.round(d).toLocaleString();
+// One line describing how duplicates were estimated, from the fitted field model
+function dupModelNote(m, mult) {
+  if (!m) return '';
+  const body = m.showdown ? `ownership (captain and flex${m.captainOwnership ? '' : ' from total ownership'}, average miss ${m.ownErrPts.toFixed(1)} pts) and salary use (${Math.round(m.salaryShare * 100)}% of lineups above $49,500)`
+    : `ownership (average miss ${m.ownErrPts.toFixed(2)} pts) and salary use (${Math.round(m.salaryShare * 100)}% of lineups within $100 of the cap)`;
+  const warn = m.ownErrPts > 2 ? ` <b>Your ownership numbers can't all be met at once</b> (they add to ${Math.round(m.ownSum || 0)}% for ${m.slots} roster spots${Math.abs((m.ownSum || 0) - 100 * m.slots) < 60 ? ', and the most expensive players are owned more than the salary cap allows' : ''}), so the model gets as close as it can and duplicate counts are rougher than usual.` : '';
+  return `<b>Duplicates:</b> each lineup's expected copies come from a model of how the whole field builds lineups, fitted to your ${body}.${warn} Expected copies = entries × the model's chance one entrant builds that exact lineup${mult && mult !== 1 ? `, × ${mult} (Field duplication)` : ''}. Copies split the prizes they tie for, so every ROI includes them. Unlike Gridlock's NFL model there is no stacking term: NBA fields don't build around team stacks. The field's most popular builds are calibrated to DraftKings NBA contest data, where the most-played lineup is about 0.1-0.3% of entries.`;
+}
 function whyHTML(R, r) {
   const site = SITES[R.site]; const sd = !!site.showdown; const F = R.fieldAvg;
   const own = ownSum(r.l), edge = r.proj - F.proj;
@@ -2872,7 +3070,7 @@ function whyHTML(R, r) {
   const money_ = R.contests.map((c, ci) => {
     const x = r.c[ci]; const parts = [x.bk.win, x.bk.top1, x.bk.top10, x.bk.cash]; const tot = parts.reduce((a, b) => a + b, 0) || 1;
     const noTop = (x.bk.top10 + x.bk.cash - c.fee) / c.fee * 100;
-    return `<div class="mrow"><div class="t"><b>${esc(c.name)}</b><span>${roiCell(x.roi)} (robust ${sgnPct(x.roiCap)}) · ${x.dups >= 0.05 ? `expected duplicates ${f1(x.dups)}` : 'unique in field'}</span></div>
+    return `<div class="mrow"><div class="t"><b>${esc(c.name)}</b><span>${roiCell(x.roi)} (robust ${sgnPct(x.roiCap)}) · ${(x.dupes || 0) >= 0.05 ? `expected duplicates ${dupFmt(x.dupes)} (already in the ROI; ${sgnPct(x.roiSolo)} if unique)` : 'expected to be unique'}</span></div>
       <div class="money" title="Average payout ${money(x.avgPay)} per entry">${parts.map((v, k) => `<i style="width:${(v / tot * 100).toFixed(1)}%;background:${C[k]}"></i>`).join('')}</div>
       <div class="t" style="color:var(--muted)"><span>${parts.map((v, k) => `${L[k]} ${Math.round(v / tot * 100)}%`).join(' · ')}</span></div>
       <div class="t" style="color:var(--muted)"><span>Without top-1% finishes, ROI would be <b style="color:var(--ink)">${sgnPct(noTop)}</b></span></div></div>`;
@@ -2931,6 +3129,7 @@ function renderSim() {
   const notes = [];
   if (R.sig !== slateSig()) notes.push('<b>Your player pool changed since this run.</b> Run the simulation again to use the new numbers.');
   if (R.vegas) notes.push(`Vegas lines are shaping this run: game totals set how much each game swings together, and spreads set blowout risk.${R.vegasAdj ? ' Projections were also adjusted to implied team totals.' : ''}`);
+  if (R.dupInfo) notes.push(dupModelNote(R.dupInfo, R.dupMult));
   notes.push(`Projection confidence ${R.conf ?? 100}%: each player's simulated average sits ${R.conf ?? 100}% of the way from his salary-implied points to your projection${(R.conf ?? 100) < 100 ? ', so value plays the sim likes are partly treated as projection error' : ''}. Use ROI to compare lineups rather than as a forecast. Field: ${R.fieldInfo ? `${Math.round(R.fieldInfo.consensusShare * 100)}% on the most obvious popular lineups, then ` : ''}${R.sharp}% optimizer users, the rest picking by projected ownership (30% of them leaning extra hard on chalk). Contests: ${R.contests.map(c => `<b>${esc(c.name)}</b> (${c.entries.toLocaleString()} entries, ${money(c.fee)}, ${money(c.pool)} prizes, top ${c.paid.toLocaleString()} paid${c.source === 'auto' ? ', typical payout curve' : ''})`).join('; ')}.`);
   note.innerHTML = `<div class="simnote">${notes.join('<br>')}</div>`;
   stats.hidden = true; foot.hidden = true;
@@ -2945,13 +3144,13 @@ function renderSim() {
     }
     const SET = BUILT ? { mine: B.mine, lineups: B.lineups } : { mine: R.mine, lineups: R.mineLineups };
     if (!BUILT && R.mineStale) note.innerHTML += `<div class="simnote"><b>You rebuilt your lineups after this run.</b> These results are for the previous set. Run the simulation again to score the new ones.</div>`;
-    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI (prizes split with duplicates)', top1: 'top 1% rate', win: 'win rate (split with duplicates)', cash: 'cash rate', true: 'True ROI (uncapped)', roiSolo: 'ROI ignoring duplicates', winSolo: 'win rate ignoring duplicates' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The leaders are re-tested twice on new replays and fields before the final cut, so a lineup has to keep scoring well rather than get lucky once. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.shape ? `<br><b>Shape:</b> picks average ${B.shape.chalk.toFixed(1)} chalk players (20%+ owned) and ${B.shape.lev.toFixed(1)} leverage spots (under 8%), ${B.shape.own.toFixed(0)}% total ownership against the field's ${S.sim && S.sim.fieldAvg ? S.sim.fieldAvg.own.toFixed(0) + '%' : '—'}, and an expected <b>${(B.shape.dupes || 0).toFixed(1)}</b> other entrants holding the same lineup${B.shape.dupesMine != null ? ` (your Optimizer lineups: ${B.shape.dupesMine.toFixed(1)})` : ''}.${B.small ? ` Small field: the pool is built around the chalk, and ${B.shape.pivots != null ? B.shape.pivots.toFixed(1) : 0} spots per lineup on average swap a popular player for a look-alike (same position and salary range, similar ceiling, good game); the sim decides which swaps are worth it.${B.pivotList && B.pivotList.length ? ` Pivots considered: ${B.pivotList.slice(0, 6).map(([c, a]) => `${esc(c)} → ${a.map(esc).join(' / ')}`).join('; ')}.` : ''}` : ''}` : ''}${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', pivot: 'chalk pivots', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
+    if (BUILT) note.innerHTML += `<div class="simnote">Picked ${SET.lineups.length} of ${B.candidates} candidates${B.passes > 1 ? `, scored over ${B.passes} passes` : ''} (${B.swaps || 0} of them player-swap improvements) by <b>${({ roi: 'ROI (prizes split with expected duplicates)', top1: 'top 1% rate', win: 'win rate', cash: 'cash rate', winAdj: 'win rate (dupe-adjusted)', roiSolo: 'ROI if unique' })[B.metric] || 'ROI'}</b>${B.teams && B.teams.length ? `, stacking ${B.teams.join('/')}` : ''}${B.maxStack ? `, max ${B.maxStack} from a team` : ''}${B.yoursCount ? ` (the pool included your ${B.yoursCount} Optimizer lineups; ${B.fromYours} made the cut)` : ''}${B.relaxed ? `. To fill all ${B.wanted} it had to loosen your limits (${['', 'one more shared player', 'more exposure and shared players', 'exposure and overlap limits lifted'][B.relaxed]})` : ''}${SET.lineups.length < B.wanted ? `. Only ${SET.lineups.length} fit your settings` : ''}. As in Gridlock, the candidate pool is fixed for a given slate and settings, while each run draws fresh replays and a fresh opponent field, so picks shift a little between runs rather than completely. The leaders are re-tested twice on new replays and fields before the final cut, so a lineup has to keep scoring well rather than get lucky once. The numbers below come from a separate check with its own field and ${(B.oosIters || 0).toLocaleString()} fresh replays: <b>${sgnPct(B.freshRoi)}</b> average ROI (robust ROI ${sgnPct(B.freshCap)}, which pays any top-0.1% finish as if it landed exactly there).${B.mineFreshRoi != null ? ` <b>Your Optimizer lineups in the same check: ${sgnPct(B.mineFreshRoi)}</b> (robust ${sgnPct(B.mineFreshCap)}).` : ''} The whole candidate pool averaged ${sgnPct(B.poolRoi)}.${B.shape ? `<br><b>Shape:</b> picks average ${B.shape.chalk.toFixed(1)} chalk players (20%+ owned) and ${B.shape.lev.toFixed(1)} leverage spots (under 8%), ${B.shape.own.toFixed(0)}% total ownership against the field's ${S.sim && S.sim.fieldAvg ? S.sim.fieldAvg.own.toFixed(0) + '%' : '—'}, and an expected <b>${(B.shape.dupes || 0).toFixed(1)}</b> other entrants holding the same lineup${B.shape.dupesMine != null ? ` (your Optimizer lineups: ${B.shape.dupesMine.toFixed(1)})` : ''}.${B.small ? ` Small field: the pool is built around the chalk, and ${B.shape.pivots != null ? B.shape.pivots.toFixed(1) : 0} spots per lineup on average swap a popular player for a look-alike (same position and salary range, similar ceiling, good game); the sim decides which swaps are worth it.${B.pivotList && B.pivotList.length ? ` Pivots considered: ${B.pivotList.slice(0, 6).map(([c, a]) => `${esc(c)} → ${a.map(esc).join(' / ')}`).join('; ')}.` : ''}` : ''}` : ''}${B.breadth === 'wide' && B.srcCounts ? (() => { const L = { base: 'standard builds', pivot: 'chalk pivots', yours: 'your lineups', swap: 'swaps', random: 'random-weight builds', contrarian: 'contrarian stacks', optimal: 'sim-optimal seeds', guided: 'sim-guided builds', wideswap: 'wide swaps' }; const offK = ['random', 'contrarian', 'optimal', 'guided', 'wideswap']; const off = offK.reduce((a, k) => a + (B.srcCounts[k] || 0), 0); const fmt = o => Object.entries(o).map(([k, v]) => `${v} ${L[k] || k}`).join(', '); return `<br><b>Wide search:</b> ${off} of ${SET.lineups.length} picks came from off-the-board sources (${fmt(B.srcCounts)}), from ${B.candidates.toLocaleString()} candidates scored (${fmt(B.srcPool)}).`; })() : ''}</div>`;
     const rows = SET.mine.map((r, i) => ({ ...r, i, l: SET.lineups[i], proj: SET.lineups[i].reduce((a, p, j) => a + p.proj * (site.showdown && j === 0 ? 1.5 : 1), 0) }));
     const CT = R.contests; const val = (r, k) => { if (k === 'i') return -r.i; const m = /^c(\d+)\.(\w+)$/.exec(k); return m ? (r.c[+m[1]] ? r.c[+m[1]][m[2]] : null) : r[k]; };
     const avg = k => rows.reduce((a, r) => a + val(r, k), 0) / rows.length;
     const sgn = x => (x >= 0 ? '+' : '') + Math.round(x) + '%';
     stats.hidden = false;
-    stats.innerHTML = CT.map((c, ci) => [[`${c.short} avg ROI`, sgn(avg(`c${ci}.roi`))], [`${c.short} best ROI`, sgn(Math.max(...rows.map(r => r.c[ci].roi)))], [`${c.short} avg cash`, pctFmt(avg(`c${ci}.cash`))]]).flat().concat([['Avg sim score', f1(avg('mean'))]])
+    stats.innerHTML = CT.map((c, ci) => [[`${c.short} avg ROI`, sgn(avg(`c${ci}.roi`))], [`${c.short} best ROI`, sgn(Math.max(...rows.map(r => r.c[ci].roi)))], [`${c.short} avg cash`, pctFmt(avg(`c${ci}.cash`))], [`${c.short} ROI if unique`, sgn(avg(`c${ci}.roiSolo`))], [`${c.short} avg dupes`, dupFmt(avg(`c${ci}.dupes`))]]).flat().concat([['Avg sim score', f1(avg('mean'))]])
       .map(([t, v]) => `<div class="stat"><span>${t}</span><b>${v}</b></div>`).join('');
     if (!/^c\d+\.\w+$/.test(S.simSort.key) && !['i', 'proj', 'mean', 'p99'].includes(S.simSort.key) || /^c(\d+)/.test(S.simSort.key) && +/^c(\d+)/.exec(S.simSort.key)[1] >= CT.length) S.simSort = { key: 'c0.roi', dir: -1 };
     sortRows(rows, S.simSort, val);
@@ -2959,13 +3158,13 @@ function renderSim() {
     note.innerHTML += driversHTML(R, rows, avgRoi);
     const lo = Math.min(...rows.map(r => r.p10)), hi = Math.max(...rows.map(r => r.p99)); const X = v => ((v - lo) / (hi - lo || 1) * 100).toFixed(1);
     const cth = (k, t, first) => th(k, t, S.simSort).replace('<th class="sortable n"', `<th class="sortable n${first ? ' cg' : ''}"`);
-    const ncol = 7 + CT.length * 4;
+    const ncol = 7 + CT.length * 5;
     body.innerHTML = `<table class="simt"><thead><tr>${th('i', '#', S.simSort, false)}<th></th><th>Lineup</th>${th('proj', 'Proj', S.simSort)}${th('mean', 'Sim avg', S.simSort)}<th>Range (10th–99th)</th>${th('p99', '99th', S.simSort)}` +
-      CT.map((c, ci) => cth(`c${ci}.cash`, `${esc(c.short)}<br>Cash`, true) + cth(`c${ci}.top1`, `${esc(c.short)}<br>Top 1%`) + cth(`c${ci}.win`, `${esc(c.short)}<br>Win`) + cth(`c${ci}.roi`, `${esc(c.short)}<br>ROI`)).join('') + `</tr></thead><tbody>` +
+      CT.map((c, ci) => cth(`c${ci}.cash`, `${esc(c.short)}<br>Cash`, true) + cth(`c${ci}.top1`, `${esc(c.short)}<br>Top 1%`) + cth(`c${ci}.winRaw`, `${esc(c.short)}<br>Win`) + cth(`c${ci}.roi`, `${esc(c.short)}<br>ROI`) + cth(`c${ci}.dupes`, `${esc(c.short)}<br>Dupes`)).join('') + `</tr></thead><tbody>` +
       rows.map(r => `<tr><td class="rank">${String(r.i + 1).padStart(3, '0')}</td><td><button class="why-btn" data-why="${r.i}" aria-expanded="${S.whyOpen === r.i}">Why</button></td><td class="lnames">${lineupNames(r.l)}</td>
         <td class="n">${f1(r.proj)}</td><td class="n">${f1(r.mean)}</td>
         <td><span class="dist" title="10th ${f1(r.p10)} · median ${f1(r.p50)} · 90th ${f1(r.p90)} · 99th ${f1(r.p99)}"><i style="left:${X(r.p10)}%;width:${(X(r.p99) - X(r.p10)).toFixed(1)}%"></i><b style="left:${X(r.p10)}%;width:${(X(r.p90) - X(r.p10)).toFixed(1)}%"></b><u style="left:${X(r.p50)}%"></u></span></td>
-        <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.win)}</td><td class="n">${roiCell(x.roi)}</td>`).join('') + `</tr>` + (S.whyOpen === r.i ? `<tr class="why-row"><td colspan="${ncol}">${whyHTML(R, r)}</td></tr>` : '')).join('') + '</tbody></table>';
+        <td class="n">${f1(r.p99)}</td>` + r.c.map(x => `<td class="n cg">${pctFmt(x.cash)}</td><td class="n">${pctFmt(x.top1)}</td><td class="n">${pctFmt(x.winRaw != null ? x.winRaw : x.win)}</td><td class="n">${roiCell(x.roi)}</td><td class="n" title="Expected number of other entries holding this exact lineup. ROI already splits prizes with them${x.roiSolo != null ? `; ${sgnPct(x.roiSolo)} if no one else had it` : ''}.">${dupFmt(x.dupes)}</td>`).join('') + `</tr>` + (S.whyOpen === r.i ? `<tr class="why-row"><td colspan="${ncol}">${whyHTML(R, r)}</td></tr>` : '')).join('') + '</tbody></table>';
     foot.hidden = false;
     if (BUILT) {
       foot.innerHTML = `<span class="meta">Use these as your lineups for export on the Optimizer tab.</span><button class="btn" id="addBuilt">Add to my lineups</button><button class="btn primary" id="useBuilt">Replace my lineups</button>`;
