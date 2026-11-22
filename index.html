@@ -558,7 +558,7 @@ table.carry td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
     <div class="outwrap" id="lsOutwrap" hidden><textarea class="out" id="lsOutText" readonly aria-label="Late swap CSV"></textarea></div>
   </section>
 </div>
-<p class="ver" id="ver">Swish v42</p>
+<p class="ver" id="ver">Swish v43</p>
 <div class="drop" id="drop" hidden>Drop salary or projection CSV</div>
 
 <script>
@@ -1509,14 +1509,17 @@ function fixSlots(site, l) {
 // `fixed` (optional, by slot): players already locked in their slots stay there
 function lateSwapOrder(site, l, fixed) {
   if (!site.slots || site.showdown) return l;
-  if (!l.every(p => tipOf(p) != null)) return fixSlots(site, l);
   const flex = site.slots.map((s, i) => i).filter(i => site.slots[i].length > 1);
   if (fixed && !l.every((p, i) => p.pos.some(x => site.slots[i].includes(x)))) return l;
-  const times = [...new Set(l.map(tipOf))].sort((a, b) => a - b);
-  if (!flex.length || times.length < 2) return fixSlots(site, l);
-  // Try every legal arrangement; score = UTIL slots' game ranks first, then the other flex
-  // slots (G/F on DraftKings; G/F then F/C on FanDuel).
-  const rank = p => times.indexOf(tipOf(p));
+  if (!flex.length) return fixSlots(site, l);
+  const timed = l.every(p => tipOf(p) != null), times = timed ? [...new Set(l.map(tipOf))].sort((a, b) => a - b) : [];
+  // Try every legal arrangement. First: latest games in the flex slots (UTIL first, then G/F on
+  // DraftKings; G/F then F/C on FanDuel), so early games lock into fixed positions. Then, among
+  // players whose order is unknown or tied: each player in his own position where possible, and the
+  // flex slots to the players who can play the most positions. On DraftKings a locked player can't
+  // change slots, so a one-position player parked in UTIL takes the most flexible slot with him.
+  const rank = p => times.length > 1 ? times.indexOf(tipOf(p)) : 0;
+  const elig = p => site.slots.filter(s => p.pos.some(x => s.includes(x))).length;
   const widest = Math.max(...flex.map(i => site.slots[i].length));
   const wt = i => site.slots[i].length === widest ? 1000 : site.slots[i].length >= 4 ? 30 : 1;
   const n = site.size, cur = new Array(n), used = new Array(l.length).fill(false);
@@ -1525,7 +1528,7 @@ function lateSwapOrder(site, l, fixed) {
   const order = site.slots.map((s, i) => i).sort((a, b) => site.slots[a].length - site.slots[b].length);
   (function dfs(k) {
     if (k === n) {
-      let sc = 0; for (const i of flex) sc += rank(cur[i]) * wt(i);
+      let sc = 0; for (const i of flex) sc += (rank(cur[i]) * 1e4 + elig(cur[i])) * wt(i);
       if (sc > bestScore) { bestScore = sc; best = cur.slice(); }
       return;
     }
@@ -2308,6 +2311,13 @@ function lsRun() {
     }
     if (!next) { res.why = dead.length ? `No legal replacement fits for ${dead.map(p => p.name).join(', ')}` : 'No legal alternative'; if (!dead.length) prev.push(curOpen.map(p => p.key)); done(); continue; }
     const newScore = open.reduce((a, i) => a + score.get(next[i].key), 0), gain = newScore - curScore;
+    // What the locked slots cost: the same fill if locked players could still change slots (they can't on
+    // DraftKings). A gap means a locked player sits in a slot the best lineup needs, e.g. a center in UTIL.
+    { const lk = new Set(lockedP.map(p => p.key)), fr = rowsAll.filter(r => !lk.has(r.key)).map(r => ({ ...r }))
+        .concat(lockedP.map(p => ({ key: p.key, pos: p.pos, team: p.team, game: p.game, salary: p.salary, own: p.own || 0, v: 1000 }))); // locked rows first; their value is left out below
+      const fp = solveOne(site, fr, { prev: [], prevByKey: new Map(), uniq: 0, locks: lk, maxTeam: site.maxTeam, nodeLimit: 2e6 }).pick;
+      if (fp) { const fv = fp.filter(r => !lk.has(r.key)).reduce((a, r) => a + r.v, 0), cost = fv - newScore;
+        if (cost > 0.05) { res.slotCost = cost; res.slotWho = lockedP.filter(p => site.slots[cur.indexOf(p)].length > 1).map(p => `${p.name} at ${site.slotNames[cur.indexOf(p)]}`); } } }
     const nk = new Set(next.map(p => p.key)), ck = new Set(cur.map(p => p.key));
     const changed = cur.some(p => !nk.has(p.key));
     if (!dead.length && (!changed || gain < Math.max(minGain, 1e-6))) { res.why = changed ? `Best swap gains only ${f1(gain)}` : newsOnly && !hit ? 'Risers don\'t improve it' : 'Already the best fill'; prev.push(curOpen.map(p => p.key)); done(); continue; }
@@ -2344,7 +2354,7 @@ function renderLateSwap() {
   const site = SITES[S.site], games = lsGames(), nLocked = games.filter(g => g.locked).length;
   $('#lsGames').innerHTML = games.length ? games.map(g => `<button type="button" class="chip" data-lsg="${esc(g.game)}" aria-pressed="${g.locked}" title="${g.locked ? 'Locked: players in this game stay put' : 'Open: players in this game can be swapped'}">${esc(g.game.replace(' v ', '–'))}${g.tip != null ? ' ' + fmtTip(g.tip) : ''}${g.locked ? ' · locked' : ''}</button>`).join('') : '<span class="hint">No slate loaded.</span>';
   const timed = games.some(g => g.tip != null);
-  $('#lsGamesHint').textContent = (timed ? 'Games lock on their own at tip time. ' : 'No tip times on this slate, so mark games yourself. ') + 'Tap a game to lock or reopen it.';
+  $('#lsGamesHint').textContent = (timed ? 'Games lock on their own at tip time. ' : 'No tip times on this slate, so mark games yourself, and before lock pull Vegas lines (or enter times on the Optimizer tab) so lineups put early games in fixed positions. ') + 'Tap a game to lock or reopen it.';
   const fileOn = LS.src === 'file' && LS.entries;
   $('#lsSrc').innerHTML = `<option value="set"${fileOn ? '' : ' selected'}>Lineups shown above (${bankSet(LU_SET === 'all' ? 'allRaw' : LU_SET).length})</option>` + (LS.entries ? `<option value="file"${fileOn ? ' selected' : ''}>${esc(LS.fileName)} (${LS.entries.length} entries)</option>` : '');
   $('#lsMeta').textContent = `${nLocked} of ${games.length} games locked`;
@@ -2357,12 +2367,13 @@ function renderLateSwap() {
   const pj = l => l.reduce((a, p) => a + p.proj * boostF(p), 0), sal = l => l.reduce((a, p) => a + p.salary, 0);
   const label = { proj: 'projection', ceil: 'ceiling', small: 'small-field leverage', large: 'large-field leverage' }[LS.type];
   const nm = p => `<b>${esc(p.name)}</b> <small>${esc(p.team)} ${f1(p.proj * boostF(p))}</small>`;
-  box.innerHTML = `<div class="simnote"><b>${ch.length}</b> of ${R.length} ${LS.resSrc === 'file' ? 'entries' : 'lineups'} change${ch.length === 1 ? 's' : ''}${gains.length ? `, gaining <b>${f1(gains.reduce((a, r) => a + r.gain, 0) / gains.length)}</b> in ${label} on average` : ''}. Swaps come only from games still open and fit the salary left after your locked players.${R.some(r => r.forced && r.forced.length) ? ' Lineups marked <b>must swap</b> held a player who is excluded, out or has no projection.' : ''}</div>` +
+  box.innerHTML = `<div class="simnote"><b>${ch.length}</b> of ${R.length} ${LS.resSrc === 'file' ? 'entries' : 'lineups'} change${ch.length === 1 ? 's' : ''}${gains.length ? `, gaining <b>${f1(gains.reduce((a, r) => a + r.gain, 0) / gains.length)}</b> in ${label} on average` : ''}. Swaps come only from games still open and fit the salary left after your locked players.${R.some(r => r.slotCost) ? ` <b>${R.filter(r => r.slotCost).length}</b> could do better if their locked players were in different slots; DraftKings doesn't allow moving them after tip, so the cost is shown on those rows.` : ''}${R.some(r => r.forced && r.forced.length) ? ' Lineups marked <b>must swap</b> held a player who is excluded, out or has no projection.' : ''}</div>` +
     `<table class="simt lst"><thead><tr><th>#</th>${LS.resSrc === 'file' ? '<th>Entry</th>' : ''}<th>Swaps</th><th>Lineup after</th><th class="n">Proj</th><th class="n">Salary</th></tr></thead><tbody>` +
     R.map((r, i) => { const c = r.next !== r.cur, d = pj(r.next) - pj(r.cur);
       const sw = c ? `<div class="lsw">${r.outs.map(p => `<span class="lso">Out ${nm(p)}</span>`).join('')}${r.ins.map(p => `<span class="lsi">In ${nm(p)}</span>`).join('')}${r.forced && r.forced.length ? '<span class="lsf">must swap</span>' : ''}</div>` : `<span class="pos">${esc(r.why || 'No change')}</span>`;
       const lu = `<div class="lu2" style="grid-template-rows: repeat(${Math.ceil(r.next.length / 2)}, auto)">${r.next.map((p, j) => `<span class="${r.fixed[j] ? 'lk' : r.cur.includes(p) ? '' : 'nw'}"><i>${site.slotNames[j]}</i><b title="${esc(p.name)}">${esc(p.name)}</b><small>${esc(p.team)}${r.fixed[j] ? ' 🔒' : ''}</small></span>`).join('')}</div>`;
-      return `<tr${c ? '' : ' class="same"'}><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LS.resSrc === 'file' ? `<td class="pos" title="${esc(r.s.e.contest)}">${esc(r.s.e.entryId)}</td>` : ''}<td class="lswc">${sw}</td><td class="lnames">${lu}</td><td class="n"><b>${f1(pj(r.next))}</b>${c ? `<br><small class="${d >= 0 ? 'gd' : 'bd'}">${d >= 0 ? '+' : ''}${f1(d)}</small>` : ''}</td><td class="n">${money(sal(r.next))}</td></tr>`; }).join('') + '</tbody></table>';
+      const sc = r.slotCost ? `<span class="lsf" title="DraftKings keeps locked players in the slots they were in when their game started.">Locked slots cost ${f1(r.slotCost)}${r.slotWho && r.slotWho.length ? ` (${esc(r.slotWho.join(', '))})` : ''}</span>` : '';
+      return `<tr${c ? '' : ' class="same"'}><td class="rank">${String(i + 1).padStart(3, '0')}</td>${LS.resSrc === 'file' ? `<td class="pos" title="${esc(r.s.e.contest)}">${esc(r.s.e.entryId)}</td>` : ''}<td class="lswc">${sw}${sc}</td><td class="lnames">${lu}</td><td class="n"><b>${f1(pj(r.next))}</b>${c ? `<br><small class="${d >= 0 ? 'gd' : 'bd'}">${d >= 0 ? '+' : ''}${f1(d)}</small>` : ''}</td><td class="n">${money(sal(r.next))}</td></tr>`; }).join('') + '</tbody></table>';
   foot.hidden = false;
   $('#lsApply').hidden = LS.resSrc === 'file' || !ch.length;
   $('#lsExportMeta').textContent = LS.resSrc === 'file' ? `The CSV keeps your Entry IDs, so it uploads straight back to ${S.site === 'fd' ? 'FanDuel' : 'DraftKings'} as an entries edit. Unchanged and locked cells are left exactly as they were.` : ch.length ? 'Apply puts these swaps into your lineups. To push edits to the site in one upload, import your entries file instead.' : 'Nothing to apply.';
